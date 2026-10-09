@@ -1,6 +1,6 @@
 // GET /api/availability
 // Returns booking counts per speaker slug from Airtable:
-// { "availability": { "<slug>": { "booked": 2, "capacity": 4 } } }
+// { "availability": { "<slug>": { "booked": 2, "capacity": 4, "recordId": "rec…" } } }
 
 const DEFAULT_CAPACITY = 4;
 
@@ -42,12 +42,13 @@ const first = (v) => (Array.isArray(v) ? v[0] : v);
 
 export function toAvailability(records) {
   const availability = {};
-  for (const { fields: f } of records) {
+  for (const { id, fields: f } of records) {
     const slug = String(first(f.Slug) ?? '').trim();
     if (!slug) continue;
     availability[slug] = {
       booked: Number(first(f.Booked)) || 0,
       capacity: Number(first(f.Capacity)) || DEFAULT_CAPACITY,
+      recordId: id, // Speakers record ID, for the Bookings → Speakers link in Make
     };
   }
   return availability;

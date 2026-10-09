@@ -24,6 +24,7 @@
     const bookingIdField = document.querySelector('[data-booking-id]');
     const selectedField = document.querySelector('[data-speakers-selected]');
     const unselectedField = document.querySelector('[data-speakers-unselected]');
+    const recordIdsField = document.querySelector('[data-speakers-record-ids]');
     const counters = document.querySelectorAll('[data-speakers-counter]');
     const cardToggles = [...document.querySelectorAll('[data-speaker-toggle]')];
     if (!list || !cardToggles.length) return;
@@ -164,6 +165,13 @@
       });
 
       if (hidden) hidden.value = selected.join(SEP);
+      // Airtable record IDs of selected speakers; speakers not in Airtable are skipped
+      if (recordIdsField) {
+        recordIdsField.value = selected
+          .map((id) => known(id) && availability[id].recordId)
+          .filter(Boolean)
+          .join(SEP);
+      }
       if (selectedField) selectedField.value = selected.map((id) => labelOf(speakers.get(id))).join('; ');
       if (unselectedField) {
         unselectedField.value = [...speakers.values()]

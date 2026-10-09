@@ -19,15 +19,15 @@ const req = (origin) => new Request('https://api.test/api/availability', { heade
 
 test('maps records, skips empty slugs, defaults capacity', () => {
   const out = toAvailability([
-    { fields: { Slug: 'nordvolt', Booked: 2, Capacity: 4 } },
-    { fields: { Slug: 'agrisense' } },
-    { fields: { Slug: ['cyberveil'], Booked: [4], Capacity: '4' } },
-    { fields: { Booked: 1 } },
+    { id: 'rec1', fields: { Slug: 'nordvolt', Booked: 2, Capacity: 4 } },
+    { id: 'rec2', fields: { Slug: 'agrisense' } },
+    { id: 'rec3', fields: { Slug: ['cyberveil'], Booked: [4], Capacity: '4' } },
+    { id: 'rec4', fields: { Booked: 1 } },
   ]);
   assert.deepEqual(out, {
-    nordvolt: { booked: 2, capacity: 4 },
-    agrisense: { booked: 0, capacity: 4 },
-    cyberveil: { booked: 4, capacity: 4 },
+    nordvolt: { booked: 2, capacity: 4, recordId: 'rec1' },
+    agrisense: { booked: 0, capacity: 4, recordId: 'rec2' },
+    cyberveil: { booked: 4, capacity: 4, recordId: 'rec3' },
   });
 });
 
@@ -38,15 +38,18 @@ test('follows Airtable pagination and sets CORS + cache headers', async () => {
     const page2 = String(url).includes('offset=');
     return Response.json(
       page2
-        ? { records: [{ fields: { Slug: 'b', Booked: 4 } }] }
-        : { records: [{ fields: { Slug: 'a', Booked: 1 } }], offset: 'next' },
+        ? { records: [{ id: 'recB', fields: { Slug: 'b', Booked: 4 } }] }
+        : { records: [{ id: 'recA', fields: { Slug: 'a', Booked: 1 } }], offset: 'next' },
     );
   };
 
   const res = await GET(req('https://site.webflow.io'));
   assert.equal(res.status, 200);
   assert.deepEqual(await res.json(), {
-    availability: { a: { booked: 1, capacity: 4 }, b: { booked: 4, capacity: 4 } },
+    availability: {
+      a: { booked: 1, capacity: 4, recordId: 'recA' },
+      b: { booked: 4, capacity: 4, recordId: 'recB' },
+    },
   });
   assert.equal(calls.length, 2);
   assert.match(calls[0].url, /\/v0\/appTEST\/tblTEST\?/);
