@@ -4,8 +4,8 @@
  *   <link rel="stylesheet" href="https://venture-connections-eic-pitching-se.vercel.app/speakers.css">
  */
 :root {
-  --sp-accent: #0b5cff;
-  --sp-accent-tint: rgba(11, 92, 255, 0.08);
+  --sp-accent: #56358c;
+  --sp-accent-tint: rgba(86, 53, 140, 0.08);
   --sp-on-accent: #ffffff;
   --sp-border: #d0d5dd;
   --sp-text: #101828;
@@ -95,8 +95,8 @@
   border-color: var(--sp-accent);
 }
 .speaker-check:has(.speaker-check_input:checked) {
-  border-color: var(--sp-accent);
-  background: var(--sp-accent-tint);
+  border-color: grey;
+  background: white;
 }
 .speaker-check_on {
   display: none;
@@ -109,19 +109,8 @@
 }
 
 .comps_card.is-selected {
-  outline: 2px solid var(--sp-accent);
+  outline: 2px solid black;
   outline-offset: -2px;
-}
-
-/* company name + checkbox on one row */
-.comps_card-header-title-wrap {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem 1rem;
-}
-.comps_card-header-title-wrap > .w-embed:last-child {
-  margin-left: auto;
 }
 
 /* ---------- Availability ---------- */
