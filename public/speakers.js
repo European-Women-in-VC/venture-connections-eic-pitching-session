@@ -2,7 +2,7 @@
  * EIC Pitching Session — speaker selection + live availability
  *
  * Load in Webflow (Page settings → Before </body>):
- *   <script src="https://<project>.vercel.app/speakers.js" defer></script>
+ *   <script src="https://venture-connections-eic-pitching-se.vercel.app/speakers.js" defer></script>
  *
  * The availability API is resolved relative to this file's URL,
  * override with data-api="https://…/api/availability" on the <script> tag.

@@ -1,7 +1,7 @@
 /*
  * EIC Pitching Session — speaker selection styles
  * Load in Webflow (Page settings → Inside <head>):
- *   <link rel="stylesheet" href="https://<project>.vercel.app/speakers.css">
+ *   <link rel="stylesheet" href="https://venture-connections-eic-pitching-se.vercel.app/speakers.css">
  */
 :root {
   --sp-accent: #0b5cff;

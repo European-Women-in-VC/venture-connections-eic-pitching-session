@@ -37,8 +37,8 @@ The Speakers table must have the fields `Slug`, `Capacity` (empty = 4) and `Book
 
 See `webflow/embeds.html`. In short:
 
-- Page `<head>`: `<link rel="stylesheet" href="https://<project>.vercel.app/speakers.css">`
-- Before `</body>`: `<script src="https://<project>.vercel.app/speakers.js" defer></script>`
+- Page `<head>`: `<link rel="stylesheet" href="https://venture-connections-eic-pitching-se.vercel.app/speakers.css">`
+- Before `</body>`: `<script src="https://venture-connections-eic-pitching-se.vercel.app/speakers.js" defer></script>`
   - API URL is derived from the script URL; override with `data-api="…"`, max with `data-max="4"`.
 - Add `?speakers-debug` to the page URL to log slugs that don't match Airtable.
 
