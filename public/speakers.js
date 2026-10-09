@@ -80,11 +80,13 @@
       const label = document.createElement('label');
       label.className = 'speakers-form_item';
       label.innerHTML =
+        '<span class="speakers-form_main">' +
         '<input type="checkbox" class="speakers-form_input">' +
         '<span class="speakers-form_box" aria-hidden="true"></span>' +
         '<span class="speakers-form_text">' +
         '<span class="speakers-form_name"></span>' +
         '<span class="speakers-form_company"></span>' +
+        '</span>' +
         '</span>' +
         '<span class="speakers-form_avail"></span>';
 

@@ -167,12 +167,12 @@
   gap: 0.5rem;
   margin-bottom: 1.25rem;
 }
-/* checkbox | name + company, availability below the text */
-.speakers-form_item {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  align-items: center;
-  gap: 0.25rem 0.75rem;
+/* [checkbox + name/company] on top, availability below */
+label.speakers-form_item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
   padding: 0.75rem;
   border: 1px solid var(--sp-border);
   border-radius: var(--sp-radius);
@@ -185,6 +185,12 @@
 .speakers-form_item:has(.speakers-form_input:checked) {
   border-color: var(--sp-accent);
   background: var(--sp-accent-tint);
+}
+.speakers-form_main {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
 }
 .speakers-form_text {
   display: flex;
@@ -201,7 +207,6 @@
   font-size: 0.8125rem;
 }
 .speakers-form_avail {
-  grid-column: 2;
   color: var(--sp-muted);
   font-size: 0.75rem;
   white-space: nowrap;
