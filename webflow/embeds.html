@@ -1,0 +1,53 @@
+<!--
+  Webflow snippets — copy each block into the place noted above it.
+  {{ … }} = insert the CMS field with "+ Add Field" in the Embed editor.
+-->
+
+<!-- 1. PAGE SETTINGS → Inside <head> -->
+<link rel="stylesheet" href="https://PROJECT.vercel.app/speakers.css">
+
+<!-- 2. PAGE SETTINGS → Before </body> -->
+<script src="https://PROJECT.vercel.app/speakers.js" defer></script>
+
+
+<!-- 3. CARD CHECKBOX — Embed inside .comps_card-header-title-wrap (Collection Item) -->
+<label class="speaker-check"
+       data-speaker-toggle
+       data-speaker="{{ Slug }}"
+       data-speaker-name="{{ Speaker Name }}"
+       data-speaker-company="{{ Company Name }}">
+  <input type="checkbox" class="speaker-check_input">
+  <span class="speaker-check_box" aria-hidden="true"></span>
+  <span class="speaker-check_text">
+    <span class="speaker-check_off">Select</span>
+    <span class="speaker-check_on">Selected</span>
+  </span>
+</label>
+
+<!-- 4. AVAILABILITY BADGE — build as a Webflow Div (or Embed) next to the checkbox:
+        class "speaker-availability", custom attribute data-availability (empty value) -->
+<div class="speaker-availability" data-availability></div>
+
+
+<!-- 5. FORM HIDDEN FIELDS — Embed inside the <form> -->
+<input type="hidden" name="booking-id" data-name="Booking ID" data-booking-id>
+<input type="hidden" name="speakers" data-name="Speakers" data-speakers-hidden>
+<input type="hidden" name="speakers-selected" data-name="Speakers Selected" data-speakers-selected>
+<input type="hidden" name="speakers-unselected" data-name="Speakers Not Selected" data-speakers-unselected>
+
+<!--
+  6. FORM STRUCTURE (built in Webflow, not an Embed)
+
+  [Div data-speakers-list]  ← put OUTSIDE the <form> to send only the hidden fields,
+                              INSIDE to also send per-speaker true/false fields
+  Form Block
+  └─ Form
+     ├─ Div .speakers-form_head
+     │   ├─ Text "Choose up to 4 speakers"
+     │   └─ Text .speakers-form_counter   data-speakers-counter
+     ├─ Text input   First Name (required)
+     ├─ Text input   Last Name  (required)
+     ├─ Email input  Email      (required)
+     ├─ Embed (5. hidden fields)
+     └─ Submit
+-->

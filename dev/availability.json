@@ -1,0 +1,10 @@
+{
+  "availability": {
+    "orbitra": { "booked": 1, "capacity": 4 },
+    "nordvolt": { "booked": 4, "capacity": 4 },
+    "helixmed": { "booked": 3, "capacity": 4 },
+    "quantaflow": { "booked": 0, "capacity": 4 },
+    "agrisense": { "booked": 2, "capacity": 4 },
+    "not-on-page": { "booked": 0, "capacity": 4 }
+  }
+}

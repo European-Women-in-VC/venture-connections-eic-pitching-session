@@ -1,0 +1,8 @@
+{
+  "name": "venture-connections-eic-pitching-session",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

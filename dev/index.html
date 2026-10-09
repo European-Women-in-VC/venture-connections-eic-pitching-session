@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Speakers demo</title>
+  <link rel="stylesheet" href="/public/speakers.css">
+  <style>
+    /* minimal stand-ins for the Webflow card/form styles */
+    body { font-family: system-ui, sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 16px; background: #f9fafb; color: #101828; }
+    .comps_card { background: #fff; border: 1px solid #eaecf0; border-radius: 12px; padding: 1rem; margin-bottom: 1rem; }
+    .comps_card-header { cursor: pointer; }
+    .comps_card-header-company { font-weight: 700; }
+    .comps_card-body { display: none; padding-top: .75rem; color: #475467; }
+    .comps_card.is-open .comps_card-body { display: block; }
+    form { background: #fff; border: 1px solid #eaecf0; border-radius: 12px; padding: 1rem; }
+    form input[type=text], form input[type=email] { display: block; width: 100%; box-sizing: border-box; padding: .5rem; margin-bottom: .75rem; }
+    #log { white-space: pre-wrap; background: #101828; color: #d0d5dd; padding: 1rem; border-radius: 8px; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h1>Speakers demo</h1>
+  <p>Local test page with fake availability data. <code>nordvolt</code> is full, <code>cyberveil</code> is missing from "Airtable".</p>
+
+  <div id="cards"></div>
+
+  <div class="speakers-form_head">
+    <strong>Choose up to 4 speakers</strong>
+    <div class="speakers-form_counter" data-speakers-counter></div>
+  </div>
+  <div class="speakers-form_list" data-speakers-list></div>
+
+  <form id="booking">
+    <input type="text" name="first-name" data-name="First Name" placeholder="First name" required>
+    <input type="text" name="last-name" data-name="Last Name" placeholder="Last name" required>
+    <input type="email" name="email" data-name="Email" placeholder="Email" required>
+    <input type="hidden" name="booking-id" data-name="Booking ID" data-booking-id>
+    <input type="hidden" name="speakers" data-name="Speakers" data-speakers-hidden>
+    <input type="hidden" name="speakers-selected" data-name="Speakers Selected" data-speakers-selected>
+    <input type="hidden" name="speakers-unselected" data-name="Speakers Not Selected" data-speakers-unselected>
+    <input type="submit" value="Book">
+  </form>
+
+  <h3>Submitted (simulated Webflow handler)</h3>
+  <div id="log">—</div>
+
+  <script>
+    const people = [
+      ['orbitra', 'Anna Kowalczyk', 'Orbitra'],
+      ['nordvolt', 'Mikael Lindqvist', 'NordVolt'],
+      ['helixmed', 'Sofia Marchetti', 'HelixMed'],
+      ['quantaflow', 'Daniel Brenner', 'QuantaFlow'],
+      ['agrisense', 'Olena Petrenko', 'AgriSense'],
+      ['cyberveil', 'Tomasz Nowicki', 'CyberVeil'],
+    ];
+    document.getElementById('cards').innerHTML = people.map(([slug, name, company]) => `
+      <div class="comps_card">
+        <div class="comps_card-header">
+          <div class="comps_card-header-title-wrap">
+            <div class="comps_card-header-company">${company}</div>
+            <div class="speaker-availability" data-availability></div>
+            <div class="w-embed">
+              <label class="speaker-check" data-speaker-toggle data-speaker="${slug}" data-speaker-name="${name}" data-speaker-company="${company}">
+                <input type="checkbox" class="speaker-check_input">
+                <span class="speaker-check_box" aria-hidden="true"></span>
+                <span class="speaker-check_text"><span class="speaker-check_off">Select</span><span class="speaker-check_on">Selected</span></span>
+              </label>
+            </div>
+          </div>
+        </div>
+        <div class="comps_card-body">${name} — details…</div>
+      </div>`).join('');
+
+    // stand-in for the Finsweet accordion
+    document.querySelectorAll('.comps_card-header').forEach((h) =>
+      h.addEventListener('click', () => h.parentElement.classList.toggle('is-open')));
+
+    // stand-in for Webflow's submit handler (bubble phase)
+    document.getElementById('booking').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const data = {};
+      e.target.querySelectorAll('input:not([type=submit])').forEach((i) => (data[i.dataset.name || i.name] = i.value));
+      document.getElementById('log').textContent = JSON.stringify(data, null, 2);
+    });
+  </script>
+  <script src="/public/speakers.js" data-api="/dev/availability.json" defer></script>
+</body>
+</html>
