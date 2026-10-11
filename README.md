@@ -14,7 +14,7 @@ Webflow form → Make (sequential) → Airtable Bookings → HubSpot / emails
 
 | Path | What |
 |---|---|
-| `api/availability.js` | `GET /api/availability` → `{ availability: { <slug>: { booked, capacity } } }`. Cached 15 s on the CDN; `?fresh=…` bypasses the cache. |
+| `api/availability.js` | `GET /api/availability` → `{ availability: { <slug>: { recordId, capacity, used, available, status } } }`. Cached 15 s on the CDN; `?fresh=…` bypasses the cache. |
 | `public/speakers.js` | Front-end: card ⇄ form checkbox sync, max 4, availability badges, pre-submit check. |
 | `public/speakers.css` | Styles for checkboxes, badges, form list, toast. |
 | `webflow/embeds.html` | Snippets to paste into Webflow (script/link tags, card checkbox, badge, hidden fields). |
@@ -30,8 +30,10 @@ Webflow form → Make (sequential) → Airtable Bookings → HubSpot / emails
 | `AIRTABLE_TABLE` | Speakers table ID `tbl…` (survives renames) |
 | `ALLOWED_ORIGINS` | Comma-separated, e.g. `https://example.com,https://example.webflow.io` |
 
-The Speakers table must have the fields `Slug`, `Capacity` (empty = 4) and `Booked`
-(rollup of Bookings with `Status = Confirmed`). `Slug` must equal the Webflow CMS slug.
+The endpoint reads these fields from "EIC - Speakers": `Slug` (must equal the Webflow CMS slug),
+`Capacity`, `Capacity Used` (rollup of 1:1 Meetings' Capacity Units), `Available Places` and
+`Capacity Status` (Available / Full / Over Capacity / Paused / Unavailable / Closed).
+All capacity logic lives in those Airtable formulas; the site only displays it.
 
 ## Webflow
 
@@ -39,7 +41,10 @@ See `webflow/embeds.html`. In short:
 
 - Page `<head>`: `<link rel="stylesheet" href="https://venture-connections-eic-pitching-se.vercel.app/speakers.css">`
 - Before `</body>`: `<script src="https://venture-connections-eic-pitching-se.vercel.app/speakers.js" defer></script>`
-  - API URL is derived from the script URL; override with `data-api="…"`, max with `data-max="4"`.
+  - Options on the script tag:
+    - `data-sort="true|false"`: move unavailable speakers (full, paused, unavailable) to the end of the cards and the form list. Default `true`.
+    - `data-max="4"`: how many speakers can be selected.
+    - `data-api="…"`: availability API URL (default: derived from the script URL).
 - Add `?speakers-debug` to the page URL to log slugs that don't match Airtable.
 
 ## Develop

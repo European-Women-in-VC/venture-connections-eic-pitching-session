@@ -1,34 +1,10 @@
 {
   "availability": {
-    "orbitra": {
-      "booked": 1,
-      "capacity": 4,
-      "recordId": "recDEMO01"
-    },
-    "nordvolt": {
-      "booked": 4,
-      "capacity": 4,
-      "recordId": "recDEMO02"
-    },
-    "helixmed": {
-      "booked": 3,
-      "capacity": 4,
-      "recordId": "recDEMO03"
-    },
-    "quantaflow": {
-      "booked": 0,
-      "capacity": 4,
-      "recordId": "recDEMO04"
-    },
-    "agrisense": {
-      "booked": 2,
-      "capacity": 4,
-      "recordId": "recDEMO05"
-    },
-    "not-on-page": {
-      "booked": 0,
-      "capacity": 4,
-      "recordId": "recDEMO06"
-    }
+    "orbitra": { "recordId": "recDEMO01", "capacity": 4, "used": 1, "available": 3, "status": "available" },
+    "nordvolt": { "recordId": "recDEMO02", "capacity": 4, "used": 4, "available": 0, "status": "full" },
+    "helixmed": { "recordId": "recDEMO03", "capacity": 4, "used": 3, "available": 1, "status": "available" },
+    "quantaflow": { "recordId": "recDEMO04", "capacity": 4, "used": 0, "available": 0, "status": "paused" },
+    "agrisense": { "recordId": "recDEMO05", "capacity": 4, "used": 2, "available": 2, "status": "available" },
+    "not-on-page": { "recordId": "recDEMO06", "capacity": 4, "used": 0, "available": 4, "status": "available" }
   }
 }

@@ -6,8 +6,10 @@
 <!-- 1. PAGE SETTINGS → Inside <head> -->
 <link rel="stylesheet" href="https://venture-connections-eic-pitching-se.vercel.app/speakers.css">
 
-<!-- 2. PAGE SETTINGS → Before </body> -->
-<script src="https://venture-connections-eic-pitching-se.vercel.app/speakers.js" defer></script>
+<!-- 2. PAGE SETTINGS → Before </body>
+        data-sort="true"  → fully booked / paused / unavailable speakers move to the end of both lists
+        data-sort="false" → keep the Webflow order -->
+<script src="https://venture-connections-eic-pitching-se.vercel.app/speakers.js" data-sort="true" defer></script>
 
 
 <!-- 3. CARD CHECKBOX — Embed inside .comps_card-header-title-wrap (Collection Item) -->

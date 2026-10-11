@@ -17,17 +17,23 @@ afterEach(() => {
 
 const req = (origin) => new Request('https://api.test/api/availability', { headers: origin ? { origin } : {} });
 
-test('maps records, skips empty slugs, defaults capacity', () => {
+test('maps Airtable capacity fields and status, skips empty slugs', () => {
   const out = toAvailability([
-    { id: 'rec1', fields: { Slug: 'nordvolt', Booked: 2, Capacity: 4 } },
-    { id: 'rec2', fields: { Slug: 'agrisense' } },
-    { id: 'rec3', fields: { Slug: ['cyberveil'], Booked: [4], Capacity: '4' } },
-    { id: 'rec4', fields: { Booked: 1 } },
+    { id: 'rec1', fields: { Slug: 'proskope', Capacity: 4, 'Capacity Used': 1, 'Available Places': 3, 'Capacity Status': 'Available' } },
+    { id: 'rec2', fields: { Slug: ['geniel-srl'], Capacity: '4', 'Capacity Used': [4], 'Available Places': 0, 'Capacity Status': 'Full' } },
+    { id: 'rec3', fields: { Slug: 'over', Capacity: 4, 'Capacity Used': 5, 'Available Places': 0, 'Capacity Status': 'Over Capacity' } },
+    { id: 'rec4', fields: { Slug: 'paused', Capacity: 4, 'Capacity Used': 0, 'Available Places': 0, 'Capacity Status': 'Paused' } },
+    { id: 'rec5', fields: { Slug: 'closed', Capacity: 4, 'Available Places': 0, 'Capacity Status': 'Closed' } },
+    { id: 'rec6', fields: { Slug: 'no-status', Capacity: 2, 'Available Places': 2 } },
+    { id: 'rec7', fields: { 'Capacity Status': 'Available' } },
   ]);
   assert.deepEqual(out, {
-    nordvolt: { booked: 2, capacity: 4, recordId: 'rec1' },
-    agrisense: { booked: 0, capacity: 4, recordId: 'rec2' },
-    cyberveil: { booked: 4, capacity: 4, recordId: 'rec3' },
+    proskope: { recordId: 'rec1', capacity: 4, used: 1, available: 3, status: 'available' },
+    'geniel-srl': { recordId: 'rec2', capacity: 4, used: 4, available: 0, status: 'full' },
+    over: { recordId: 'rec3', capacity: 4, used: 5, available: 0, status: 'full' },
+    paused: { recordId: 'rec4', capacity: 4, used: 0, available: 0, status: 'paused' },
+    closed: { recordId: 'rec5', capacity: 4, used: 0, available: 0, status: 'closed' },
+    'no-status': { recordId: 'rec6', capacity: 2, used: 0, available: 2, status: 'available' },
   });
 });
 
@@ -38,8 +44,8 @@ test('follows Airtable pagination and sets CORS + cache headers', async () => {
     const page2 = String(url).includes('offset=');
     return Response.json(
       page2
-        ? { records: [{ id: 'recB', fields: { Slug: 'b', Booked: 4 } }] }
-        : { records: [{ id: 'recA', fields: { Slug: 'a', Booked: 1 } }], offset: 'next' },
+        ? { records: [{ id: 'recB', fields: { Slug: 'b', Capacity: 4, 'Capacity Used': 4, 'Capacity Status': 'Full' } }] }
+        : { records: [{ id: 'recA', fields: { Slug: 'a', Capacity: 4, 'Capacity Used': 1, 'Available Places': 3, 'Capacity Status': 'Available' } }], offset: 'next' },
     );
   };
 
@@ -47,13 +53,14 @@ test('follows Airtable pagination and sets CORS + cache headers', async () => {
   assert.equal(res.status, 200);
   assert.deepEqual(await res.json(), {
     availability: {
-      a: { booked: 1, capacity: 4, recordId: 'recA' },
-      b: { booked: 4, capacity: 4, recordId: 'recB' },
+      a: { recordId: 'recA', capacity: 4, used: 1, available: 3, status: 'available' },
+      b: { recordId: 'recB', capacity: 4, used: 4, available: 0, status: 'full' },
     },
   });
   assert.equal(calls.length, 2);
   assert.match(calls[0].url, /\/v0\/appTEST\/tblTEST\?/);
   assert.equal(calls[0].auth, 'Bearer test-token');
+  assert.equal(new URL(calls[0].url).searchParams.getAll('fields[]').at(-1), 'Capacity Status');
   assert.equal(res.headers.get('access-control-allow-origin'), 'https://site.webflow.io');
   assert.match(res.headers.get('cache-control'), /s-maxage=15/);
 });

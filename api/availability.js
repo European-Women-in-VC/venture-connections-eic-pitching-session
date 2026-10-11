@@ -1,8 +1,21 @@
 // GET /api/availability
-// Returns booking counts per speaker slug from Airtable:
-// { "availability": { "<slug>": { "booked": 2, "capacity": 4, "recordId": "rec…" } } }
+// Returns capacity per speaker slug from the Airtable "EIC - Speakers" table:
+// { "availability": { "<slug>": { "recordId": "rec…", "capacity": 4, "used": 1, "available": 3, "status": "available" } } }
+//
+// Capacity logic lives in Airtable (Capacity Used / Available Places / Capacity Status formulas);
+// this endpoint only passes it through.
 
-const DEFAULT_CAPACITY = 4;
+const FIELDS = ['Slug', 'Capacity', 'Capacity Used', 'Available Places', 'Capacity Status'];
+
+// Airtable "Capacity Status" → status sent to the page
+const STATUSES = {
+  available: 'available',
+  full: 'full',
+  'over capacity': 'full',
+  paused: 'paused',
+  unavailable: 'unavailable',
+  closed: 'closed',
+};
 
 const config = () => ({
   token: process.env.AIRTABLE_TOKEN,
@@ -21,7 +34,7 @@ async function fetchAllRecords({ token, baseId, table }) {
 
   do {
     const params = new URLSearchParams();
-    ['Slug', 'Capacity', 'Booked'].forEach((f) => params.append('fields[]', f));
+    FIELDS.forEach((f) => params.append('fields[]', f));
     if (offset) params.set('offset', offset);
 
     const res = await fetch(`${url}?${params}`, {
@@ -39,16 +52,23 @@ async function fetchAllRecords({ token, baseId, table }) {
 
 // Airtable formula/rollup fields can come back as arrays or strings
 const first = (v) => (Array.isArray(v) ? v[0] : v);
+const num = (v) => Number(first(v)) || 0;
 
 export function toAvailability(records) {
   const availability = {};
   for (const { id, fields: f } of records) {
     const slug = String(first(f.Slug) ?? '').trim();
     if (!slug) continue;
+
+    const available = num(f['Available Places']);
+    const rawStatus = String(first(f['Capacity Status']) ?? '').trim().toLowerCase();
+
     availability[slug] = {
-      booked: Number(first(f.Booked)) || 0,
-      capacity: Number(first(f.Capacity)) || DEFAULT_CAPACITY,
-      recordId: id, // Speakers record ID, for the Bookings → Speakers link in Make
+      recordId: id, // Speakers record ID, for linking 1:1 Meetings in Make
+      capacity: num(f.Capacity),
+      used: num(f['Capacity Used']),
+      available,
+      status: STATUSES[rawStatus] || (available > 0 ? 'available' : 'full'),
     };
   }
   return availability;

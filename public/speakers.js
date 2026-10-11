@@ -4,8 +4,10 @@
  * Load in Webflow (Page settings → Before </body>):
  *   <script src="https://venture-connections-eic-pitching-se.vercel.app/speakers.js" defer></script>
  *
- * The availability API is resolved relative to this file's URL,
- * override with data-api="https://…/api/availability" on the <script> tag.
+ * Options (attributes on the <script> tag):
+ *   data-sort="false"   keep the page order (default "true": unavailable speakers move to the end)
+ *   data-max="4"        how many speakers can be selected
+ *   data-api="…"        availability API URL (default: /api/availability next to this file)
  * Add ?speakers-debug to the page URL to log slug mismatches.
  */
 (() => {
@@ -17,6 +19,8 @@
   const SEP = ';';
   const REFRESH_MS = 60000;
   const DEBUG = new URLSearchParams(location.search).has('speakers-debug');
+  // move unavailable speakers to the end of both lists: data-sort="true" (default) | "false"
+  const SORT = !(script && script.dataset.sort === 'false');
 
   function init() {
     const list = document.querySelector('[data-speakers-list]');
@@ -33,11 +37,15 @@
     const form = (hidden || bookingIdField || list).closest('form');
 
     const selected = []; // ordered slugs — single source of truth
-    let availability = {}; // slug -> { booked, capacity }; missing = unknown (no limit)
+    let availability = {}; // slug -> { recordId, capacity, used, available, status }; missing = unknown (no limit)
     let reported = false;
 
     const known = (id) => Object.prototype.hasOwnProperty.call(availability, id);
-    const isFull = (id) => known(id) && availability[id].booked >= availability[id].capacity;
+    // anything other than "available" (full, paused, unavailable, closed) can't be selected
+    const isBlocked = (id) => known(id) && availability[id].status !== 'available';
+    const BADGES = { full: 'Fully booked', paused: 'Paused', unavailable: 'Unavailable', closed: 'Unavailable' };
+    const blockedMessage = (id) =>
+      shortOf(id) + (availability[id].status === 'full' ? ' is fully booked.' : ' is not taking requests right now.');
 
     if (bookingIdField && !bookingIdField.value) {
       bookingIdField.value = crypto.randomUUID
@@ -100,11 +108,56 @@
       label.querySelector('.speakers-form_company').textContent = s.company;
       label.querySelector('.speakers-form_avail').dataset.availability = s.id;
 
-      label.addEventListener('click', () => warnIfFull(input));
+      label.addEventListener('click', () => warnIfBlocked(input));
       list.appendChild(label);
     });
 
     const allInputs = () => document.querySelectorAll('[data-speaker-input]');
+
+    // ---------- Sorting: unavailable speakers last ----------
+    // Lists of { el, id } in original page order, grouped by parent element.
+    // Cards inside a Webflow Collection List move together with their .w-dyn-item wrapper.
+    function groupByParent(items) {
+      const groups = new Map();
+      items.forEach((item) => {
+        const parent = item.el.parentElement;
+        if (!parent) return;
+        if (!groups.has(parent)) groups.set(parent, []);
+        if (!groups.get(parent).some((i) => i.el === item.el)) groups.get(parent).push(item);
+      });
+      return [...groups.values()];
+    }
+
+    const sortGroups = groupByParent([
+      ...cardToggles
+        .filter((t) => t.dataset.speaker && t.closest('.comps_card'))
+        .map((t) => {
+          const card = t.closest('.comps_card');
+          return { el: card.closest('.w-dyn-item') || card, id: t.dataset.speaker.trim() };
+        }),
+      ...[...list.querySelectorAll('.speakers-form_item')].map((label) => ({
+        el: label,
+        id: label.querySelector('[data-speaker-input]').dataset.speakerInput,
+      })),
+    ]);
+
+    function sortLists() {
+      if (!SORT) return;
+      sortGroups.forEach((items) => {
+        // stable: original order is kept inside the available and unavailable groups
+        const ordered = [...items.filter((i) => !isBlocked(i.id)), ...items.filter((i) => isBlocked(i.id))];
+        const current = [...items[0].el.parentElement.children].filter((c) => items.some((i) => i.el === c));
+        if (ordered.every((i, n) => i.el === current[n])) return; // already in place
+
+        // refill the slots the items occupy now, so other siblings (embeds etc.) stay put
+        const markers = current.map((el) => {
+          const marker = document.createComment('');
+          el.before(marker);
+          return marker;
+        });
+        ordered.forEach((i, n) => markers[n].replaceWith(i.el));
+      });
+    }
 
     // ---------- Toast ----------
     const toast = document.createElement('div');
@@ -125,8 +178,8 @@
       });
     }
 
-    function warnIfFull(input) {
-      if (input.disabled) warn(shortOf(input.dataset.speakerInput) + ' is fully booked.');
+    function warnIfBlocked(input) {
+      if (input.disabled) warn(blockedMessage(input.dataset.speakerInput));
     }
 
     // ---------- Render ----------
@@ -137,20 +190,20 @@
       allInputs().forEach((input) => {
         const id = input.dataset.speakerInput;
         const on = selected.includes(id);
-        const full = isFull(id);
+        const blocked = isBlocked(id);
         input.checked = on;
-        input.disabled = full && !on;
+        input.disabled = blocked && !on;
         const label = input.closest('label');
         if (label) {
-          label.classList.toggle('is-full', full);
-          label.classList.toggle('is-limit', atMax && !on && !full);
+          label.classList.toggle('is-full', blocked);
+          label.classList.toggle('is-limit', atMax && !on && !blocked);
         }
       });
 
       document.querySelectorAll('[data-speaker-card]').forEach((card) => {
         const id = card.dataset.speakerCard;
         card.classList.toggle('is-selected', selected.includes(id));
-        card.classList.toggle('is-full', isFull(id));
+        card.classList.toggle('is-full', isBlocked(id));
       });
 
       document.querySelectorAll('[data-availability]').forEach((el) => {
@@ -158,12 +211,14 @@
         if (!id || !known(id)) {
           el.textContent = ''; // not in Airtable → hidden via :empty
           el.classList.remove('is-full');
+          el.removeAttribute('data-status');
           return;
         }
         const a = availability[id];
-        const full = isFull(id);
-        el.textContent = full ? 'Fully booked' : a.booked + '/' + a.capacity + ' booked';
-        el.classList.toggle('is-full', full);
+        const blocked = isBlocked(id);
+        el.textContent = blocked ? BADGES[a.status] || 'Unavailable' : a.used + '/' + a.capacity + ' booked';
+        el.classList.toggle('is-full', blocked);
+        el.dataset.status = a.status;
       });
 
       if (hidden) hidden.value = selected.join(SEP);
@@ -196,9 +251,9 @@
       if (!id) return;
 
       if (input.checked) {
-        if (isFull(id)) {
+        if (isBlocked(id)) {
           input.checked = false;
-          warn(shortOf(id) + ' is fully booked.');
+          warn(blockedMessage(id));
         } else if (!selected.includes(id)) {
           if (selected.length >= MAX) {
             input.checked = false;
@@ -220,7 +275,7 @@
       ['click', 'keydown', 'keyup', 'mousedown', 'pointerdown', 'touchstart'].forEach((type) =>
         t.addEventListener(type, (e) => e.stopPropagation(), { passive: true }),
       );
-      t.addEventListener('click', () => warnIfFull(t.querySelector('input')));
+      t.addEventListener('click', () => warnIfBlocked(t.querySelector('input')));
     });
 
     // ---------- Availability ----------
@@ -244,16 +299,20 @@
       if (DEBUG && !reported) debugReport();
       reported = true;
 
-      const lost = selected.filter(isFull);
+      const lost = selected.filter(isBlocked);
       lost.forEach((id) => selected.splice(selected.indexOf(id), 1));
       if (lost.length) {
+        const many = lost.length > 1;
         warn(
           lost.map(shortOf).join(', ') +
-            (lost.length > 1 ? ' were' : ' was') +
-            ' just fully booked and removed from your selection.',
+            (many ? ' are' : ' is') +
+            ' no longer available and ' +
+            (many ? 'were' : 'was') +
+            ' removed from your selection.',
         );
       }
       render();
+      sortLists();
       return lost;
     }
 

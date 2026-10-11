@@ -22,7 +22,8 @@
   <h1>Speakers demo</h1>
   <p>Local test page with fake availability data. <code>nordvolt</code> is full, <code>cyberveil</code> is missing from "Airtable".</p>
 
-  <div id="cards"></div>
+  <!-- mirrors Webflow: Collection List → items, with a hidden embed inside the list -->
+  <div class="w-dyn-list"><div id="cards" class="w-dyn-items" role="list"></div></div>
 
   <div class="speakers-form_head">
     <strong>Choose up to 4 speakers</strong>
@@ -54,8 +55,8 @@
       ['agrisense', 'Olena Petrenko', 'AgriSense'],
       ['cyberveil', 'Tomasz Nowicki', 'CyberVeil'],
     ];
-    document.getElementById('cards').innerHTML = people.map(([slug, name, company]) => `
-      <div class="comps_card">
+    document.getElementById('cards').innerHTML = '<div class="visually-hidden w-embed"><style>/* embed */</style></div>' + people.map(([slug, name, company]) => `
+      <div class="w-dyn-item" role="listitem"><div class="comps_card">
         <div class="comps_card-header">
           <div class="comps_card-header-title-wrap">
             <div class="comps_card-header-company">${company}</div>
@@ -70,7 +71,7 @@
           </div>
         </div>
         <div class="comps_card-body">${name} — details…</div>
-      </div>`).join('');
+      </div></div>`).join('');
 
     // stand-in for the Finsweet accordion
     document.querySelectorAll('.comps_card-header').forEach((h) =>
@@ -84,6 +85,13 @@
       document.getElementById('log').textContent = JSON.stringify(data, null, 2);
     });
   </script>
-  <script src="/public/speakers.js" data-api="/dev/availability.json" defer></script>
+  <script>
+    // same tag as in Webflow; ?sort=false on this demo URL sets data-sort="false"
+    const tag = document.createElement('script');
+    tag.src = '/public/speakers.js';
+    tag.dataset.api = '/dev/availability.json';
+    tag.dataset.sort = new URLSearchParams(location.search).get('sort') || 'true';
+    document.body.append(tag);
+  </script>
 </body>
 </html>
