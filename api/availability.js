@@ -89,7 +89,7 @@ export async function GET(request) {
     const availability = toAvailability(await fetchAllRecords(cfg));
     return Response.json(
       { availability },
-      { headers: { ...headers, 'Cache-Control': 'public, s-maxage=15, stale-while-revalidate=60' } },
+      { headers: { ...headers, 'Cache-Control': 'public, s-maxage=10, stale-while-revalidate=30' } },
     );
   } catch (err) {
     console.error(err);

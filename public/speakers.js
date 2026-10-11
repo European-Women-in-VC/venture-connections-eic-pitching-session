@@ -17,7 +17,8 @@
     (script && script.src ? new URL('/api/availability', script.src).href : '/api/availability');
   const MAX = Number((script && script.dataset.max) || 4);
   const SEP = ';';
-  const REFRESH_MS = 60000;
+  const REFRESH_MS = 15000; // background refresh while the page is visible
+  const SELECT_CHECK_MS = 5000; // ticking a speaker triggers a fresh check at most this often
   const DEBUG = new URLSearchParams(location.search).has('speakers-debug');
   // move unavailable speakers to the end of both lists: data-sort="true" (default) | "false"
   const SORT = !(script && script.dataset.sort === 'false');
@@ -182,6 +183,13 @@
       if (input.disabled) warn(blockedMessage(input.dataset.speakerInput));
     }
 
+    function highlight(el) {
+      el.classList.remove('is-updated');
+      void el.offsetWidth; // restart animation
+      el.classList.add('is-updated');
+      el.addEventListener('animationend', () => el.classList.remove('is-updated'), { once: true });
+    }
+
     // ---------- Render ----------
     function render() {
       const n = selected.length;
@@ -216,7 +224,9 @@
         }
         const a = availability[id];
         const blocked = isBlocked(id);
-        el.textContent = blocked ? BADGES[a.status] || 'Unavailable' : a.used + '/' + a.capacity + ' booked';
+        const text = blocked ? BADGES[a.status] || 'Unavailable' : a.used + '/' + a.capacity + ' booked';
+        if (el.textContent && el.textContent !== text) highlight(el); // someone else just booked/freed a place
+        el.textContent = text;
         el.classList.toggle('is-full', blocked);
         el.dataset.status = a.status;
       });
@@ -260,6 +270,7 @@
             warn('You can select up to ' + MAX + ' speakers. Unselect one to choose another.');
           } else {
             selected.push(id);
+            checkOnSelect();
           }
         }
       } else {
@@ -287,6 +298,14 @@
       console.warn('On page, NOT in Airtable (no limit applied):', page.filter((s) => !air.includes(s)));
       console.warn('In Airtable, NOT on page:', air.filter((s) => !page.includes(s)));
       console.groupEnd();
+    }
+
+    // fresh check right when a speaker is ticked, throttled per visitor
+    let lastSelectCheck = 0;
+    function checkOnSelect() {
+      if (Date.now() - lastSelectCheck < SELECT_CHECK_MS) return;
+      lastSelectCheck = Date.now();
+      refresh(true).catch(console.warn);
     }
 
     async function refresh(fresh) {

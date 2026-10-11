@@ -212,6 +212,23 @@ label.speakers-form_item {
   font-size: 0.75rem;
   white-space: nowrap;
 }
+/* badge changed after someone else booked/freed a place */
+.speaker-availability.is-updated,
+.speakers-form_avail.is-updated {
+  border-radius: 999px;
+  animation: sp-updated 1.6s ease-out;
+}
+@keyframes sp-updated {
+  0%,
+  25% {
+    background-color: var(--sp-warn-bg);
+    box-shadow: 0 0 0 4px var(--sp-warn-border);
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
 .speakers-form_avail.is-full {
   color: var(--sp-danger);
 }
@@ -262,7 +279,9 @@ label.speakers-form_item {
 }
 @media (prefers-reduced-motion: reduce) {
   .speakers-toast,
-  .speakers-form_counter.is-shake {
+  .speakers-form_counter.is-shake,
+  .speaker-availability.is-updated,
+  .speakers-form_avail.is-updated {
     transition: none;
     animation: none;
   }

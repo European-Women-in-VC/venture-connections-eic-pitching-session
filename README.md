@@ -14,7 +14,7 @@ Webflow form → Make (sequential) → Airtable Bookings → HubSpot / emails
 
 | Path | What |
 |---|---|
-| `api/availability.js` | `GET /api/availability` → `{ availability: { <slug>: { recordId, capacity, used, available, status } } }`. Cached 15 s on the CDN; `?fresh=…` bypasses the cache. |
+| `api/availability.js` | `GET /api/availability` → `{ availability: { <slug>: { recordId, capacity, used, available, status } } }`. Cached 10 s on the CDN; `?fresh=…` bypasses the cache. |
 | `public/speakers.js` | Front-end: card ⇄ form checkbox sync, max 4, availability badges, pre-submit check. |
 | `public/speakers.css` | Styles for checkboxes, badges, form list, toast. |
 | `webflow/embeds.html` | Snippets to paste into Webflow (script/link tags, card checkbox, badge, hidden fields). |

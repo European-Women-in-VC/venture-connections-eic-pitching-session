@@ -62,7 +62,7 @@ test('follows Airtable pagination and sets CORS + cache headers', async () => {
   assert.equal(calls[0].auth, 'Bearer test-token');
   assert.equal(new URL(calls[0].url).searchParams.getAll('fields[]').at(-1), 'Capacity Status');
   assert.equal(res.headers.get('access-control-allow-origin'), 'https://site.webflow.io');
-  assert.match(res.headers.get('cache-control'), /s-maxage=15/);
+  assert.match(res.headers.get('cache-control'), /s-maxage=10/);
 });
 
 test('no CORS header for unknown origin', async () => {
