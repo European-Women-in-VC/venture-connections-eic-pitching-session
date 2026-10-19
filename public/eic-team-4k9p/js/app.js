@@ -1054,7 +1054,6 @@ function openDrawer({ title, subtitle = '', body, footerLeft = '', submitLabel =
       btn.disabled = false;
     }
   });
-  form.querySelector('input:not([type=hidden]):not([disabled]), textarea, select')?.focus({ preventScroll: true });
   return form;
 }
 
