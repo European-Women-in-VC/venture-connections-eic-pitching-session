@@ -132,6 +132,10 @@ const ICONS = {
   plus: '<path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />',
   logout: '<path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15m3 0 3-3m0 0-3-3m3 3H9" />',
   arrow: '<path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />',
+  menu: '<path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />',
+  layoutSide: '<rect x="3.75" y="4.5" width="16.5" height="15" rx="2.25" /><path stroke-linecap="round" d="M9.75 4.5v15" />',
+  layoutRail: '<rect x="3.75" y="4.5" width="16.5" height="15" rx="2.25" /><path stroke-linecap="round" d="M7.5 4.5v15" />',
+  layoutTop: '<rect x="3.75" y="4.5" width="16.5" height="15" rx="2.25" /><path stroke-linecap="round" d="M3.75 9h16.5" />',
   sync: '<path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />',
 };
 const icon = (name, cls = 'size-5') =>
@@ -318,65 +322,165 @@ const NAV = [
   { id: 'speakers', label: 'Speakers' },
 ];
 
+// Menu layouts on desktop (saved per browser): 'side' = full sidebar, 'rail' = icon bar, 'top' = bar above
+// the content. Below the md breakpoint the menu always slides in from the left (☰ button).
+const LAYOUTS = [
+  { id: 'side', label: 'Sidebar', icon: 'layoutSide' },
+  { id: 'rail', label: 'Collapsed sidebar', icon: 'layoutRail' },
+  { id: 'top', label: 'Menu on top', icon: 'layoutTop' },
+];
+const LAYOUT_KEY = 'eic-panel-layout';
+function savedLayout() {
+  try {
+    const v = localStorage.getItem(LAYOUT_KEY);
+    return LAYOUTS.some((l) => l.id === v) ? v : 'side';
+  } catch {
+    return 'side';
+  }
+}
+let layout = savedLayout();
+
+function setLayout(next) {
+  layout = next;
+  try {
+    localStorage.setItem(LAYOUT_KEY, next);
+  } catch {
+    /* private mode: just not remembered */
+  }
+  renderShell();
+  renderView();
+}
+
+const brandMark = (size = 'size-8') =>
+  `<div class="flex ${size} shrink-0 items-center justify-center rounded-lg bg-brand-600 text-[11px] font-bold text-white">EIC</div>`;
+const brandText = `<div class="leading-tight"><p class="text-sm font-semibold">EIC Bookings</p><p class="text-xs text-slate-500">Pitching Session</p></div>`;
+
+function layoutSwitcher(compact = false) {
+  return `<div class="inline-flex rounded-lg bg-slate-100 p-0.5 ${compact ? 'flex-col' : ''}" role="group" aria-label="Menu layout">
+    ${LAYOUTS.map(
+      (l) => `<button type="button" data-layout-set="${l.id}" title="${esc(l.label)}" aria-label="${esc(l.label)}" aria-pressed="${layout === l.id}"
+        class="rounded-md p-1.5 ${layout === l.id ? 'bg-white text-brand-600 shadow-xs' : 'text-slate-400 hover:text-slate-700'}">${icon(l.icon, 'size-4')}</button>`,
+    ).join('')}
+  </div>`;
+}
+
+const signOutButton = (withLabel) =>
+  `<button data-action="sign-out" title="Sign out" class="inline-flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-900">${icon('logout', withLabel ? 'size-4' : 'size-5')}${withLabel ? ' Sign out' : ''}</button>`;
+
+// full sidebar content, also used by the mobile slide-in menu
+const sidebarContent = (variant) => `
+  <div class="flex h-16 shrink-0 items-center gap-2.5 border-b border-slate-200 px-5">
+    ${brandMark()}${brandText}
+    ${variant === 'mobile' ? `<button data-action="mobile-menu-close" class="ml-auto rounded-lg p-1.5 text-slate-400 hover:bg-slate-100" aria-label="Close menu">${icon('close')}</button>` : ''}
+  </div>
+  <nav class="flex-1 space-y-0.5 overflow-y-auto p-3" data-nav="full"></nav>
+  <div class="space-y-3 border-t border-slate-200 p-4">
+    <div data-live="full" class="flex items-center gap-2 text-xs text-slate-500"></div>
+    <div>
+      <p class="truncate text-xs font-medium text-slate-700" title="${esc(state.user.email)}">${esc(state.user.email)}</p>
+      <div class="mt-2 flex items-center justify-between gap-2">${signOutButton(true)}${variant === 'mobile' ? '' : layoutSwitcher()}</div>
+    </div>
+  </div>`;
+
 function renderShell() {
-  app.innerHTML = `
-    <div class="flex h-full">
-      <aside class="hidden w-60 shrink-0 flex-col border-r border-slate-200 bg-white md:flex">
-        <div class="flex h-16 items-center gap-2.5 border-b border-slate-200 px-5">
-          <div class="flex size-8 items-center justify-center rounded-lg bg-brand-600 text-[11px] font-bold text-white">EIC</div>
-          <div class="leading-tight">
-            <p class="text-sm font-semibold">EIC Bookings</p>
-            <p class="text-xs text-slate-500">Pitching Session</p>
-          </div>
-        </div>
-        <nav class="flex-1 space-y-0.5 p-3" id="nav"></nav>
-        <div class="border-t border-slate-200 p-4">
-          <div id="live" class="mb-3 flex items-center gap-2 text-xs text-slate-500"></div>
-          <p class="truncate text-xs font-medium text-slate-700" title="${esc(state.user.email)}">${esc(state.user.email)}</p>
-          <button data-action="sign-out" class="mt-2 inline-flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-900">${icon('logout', 'size-4')} Sign out</button>
-        </div>
-      </aside>
-      <div class="flex min-w-0 flex-1 flex-col">
-        <header class="flex items-center gap-3 border-b border-slate-200 bg-white px-4 py-3 md:hidden">
-          <div class="flex size-8 items-center justify-center rounded-lg bg-brand-600 text-[11px] font-bold text-white">EIC</div>
-          <select id="mobile-nav" class="${SELECT} flex-1">${NAV.map((n) => `<option value="${n.id}">${esc(n.label)}</option>`).join('')}</select>
-          <button data-action="sign-out" class="text-slate-500" title="Sign out">${icon('logout')}</button>
-        </header>
-        <main id="main" class="min-w-0 flex-1 overflow-y-auto scrollbar-thin"></main>
-      </div>
+  const mobileBar = `
+    <header class="flex shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-4 py-3 md:hidden">
+      <button data-action="mobile-menu-open" class="-ml-1 rounded-lg p-1.5 text-slate-600 hover:bg-slate-100" aria-label="Open menu" aria-controls="mobile-menu">${icon('menu', 'size-6')}</button>
+      ${brandMark()}
+      <p class="min-w-0 flex-1 truncate text-sm font-semibold" data-current-view></p>
+      <span data-live="dot"></span>
+    </header>
+    <div id="mobile-menu" class="fixed inset-0 z-40 hidden md:hidden" role="dialog" aria-modal="true" aria-label="Menu">
+      <div class="absolute inset-0 bg-slate-900/30" data-action="mobile-menu-close"></div>
+      <aside class="absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col bg-white shadow-2xl">${sidebarContent('mobile')}</aside>
     </div>`;
-  document.getElementById('mobile-nav').addEventListener('change', (e) => (location.hash = e.target.value));
+
+  let desktop;
+  if (layout === 'top') {
+    desktop = `
+      <header class="hidden shrink-0 items-center gap-6 border-b border-slate-200 bg-white px-6 md:flex">
+        <div class="flex items-center gap-2.5 py-3">${brandMark()}<span class="hidden lg:block">${brandText}</span></div>
+        <nav class="-mb-px flex flex-1 items-stretch gap-1 self-stretch overflow-x-auto scrollbar-thin" data-nav="top"></nav>
+        <div class="flex items-center gap-4">
+          <span data-live="dot"></span>
+          <span class="hidden max-w-48 truncate text-xs text-slate-500 xl:block" title="${esc(state.user.email)}">${esc(state.user.email)}</span>
+          ${layoutSwitcher()}
+          ${signOutButton(false)}
+        </div>
+      </header>`;
+  } else if (layout === 'rail') {
+    desktop = `
+      <aside class="hidden w-16 shrink-0 flex-col items-center border-r border-slate-200 bg-white md:flex">
+        <div class="flex h-16 w-full items-center justify-center border-b border-slate-200">${brandMark()}</div>
+        <nav class="flex w-full flex-1 flex-col items-center gap-1 p-2" data-nav="rail"></nav>
+        <div class="flex w-full flex-col items-center gap-3 border-t border-slate-200 py-4">
+          <span data-live="dot"></span>
+          ${layoutSwitcher(true)}
+          ${signOutButton(false)}
+        </div>
+      </aside>`;
+  } else {
+    desktop = `<aside class="hidden w-60 shrink-0 flex-col border-r border-slate-200 bg-white md:flex">${sidebarContent('side')}</aside>`;
+  }
+
+  app.innerHTML =
+    layout === 'top'
+      ? `<div class="flex h-full flex-col">${mobileBar}${desktop}<main id="main" class="min-w-0 flex-1 overflow-y-auto scrollbar-thin"></main></div>`
+      : `<div class="flex h-full">${desktop}<div class="flex min-w-0 flex-1 flex-col">${mobileBar}<main id="main" class="min-w-0 flex-1 overflow-y-auto scrollbar-thin"></main></div></div>`;
   renderNav();
   renderLive();
 }
 
+function toggleMobileMenu(open) {
+  const menu = document.getElementById('mobile-menu');
+  if (!menu) return;
+  menu.classList.toggle('hidden', !open);
+  if (open) menu.querySelector('a, button')?.focus();
+}
+
 function renderNav() {
-  const nav = document.getElementById('nav');
-  if (!nav) return;
   const { requests, submissions } = state.data;
   const counts = {
     requests: requests.filter((r) => r.status === 'new_request' || r.status === 'needs_review').length,
     investors: submissions.filter((s) => s.status === 'todo').length,
   };
-  nav.innerHTML = NAV.map((n) => {
-    const active = state.view === n.id;
-    const count = counts[n.id];
-    return `<a href="#${n.id}" class="group flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium ${active ? 'bg-brand-50 text-brand-700' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'}">
-      <span class="${active ? 'text-brand-600' : 'text-slate-400 group-hover:text-slate-500'}">${icon(n.id)}</span>
-      <span class="flex-1">${esc(n.label)}</span>
-      ${count ? `<span class="rounded-full ${active ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-600'} px-2 py-0.5 text-xs font-semibold" title="${n.id === 'requests' ? 'New or needs review' : 'To do'}">${count}</span>` : ''}
-    </a>`;
-  }).join('');
-  const mobile = document.getElementById('mobile-nav');
-  if (mobile) mobile.value = state.view;
+  const countTitle = (id) => (id === 'requests' ? 'New or needs review' : 'To do');
+
+  const variants = {
+    full: (n, active, count) => `<a href="#${n.id}" ${active ? 'aria-current="page"' : ''} class="group flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium ${active ? 'bg-brand-50 text-brand-700' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'}">
+        <span class="${active ? 'text-brand-600' : 'text-slate-400 group-hover:text-slate-500'}">${icon(n.id)}</span>
+        <span class="flex-1">${esc(n.label)}</span>
+        ${count ? `<span class="rounded-full ${active ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-600'} px-2 py-0.5 text-xs font-semibold" title="${countTitle(n.id)}">${count}</span>` : ''}
+      </a>`,
+    rail: (n, active, count) => `<a href="#${n.id}" ${active ? 'aria-current="page"' : ''} title="${esc(n.label)}${count ? ` (${count} ${countTitle(n.id).toLowerCase()})` : ''}" aria-label="${esc(n.label)}"
+        class="relative flex size-10 items-center justify-center rounded-lg ${active ? 'bg-brand-50 text-brand-600' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-700'}">
+        ${icon(n.id)}
+        ${count ? `<span class="absolute -top-0.5 -right-0.5 min-w-4 rounded-full bg-brand-600 px-1 text-center text-[10px] leading-4 font-semibold text-white">${count}</span>` : ''}
+      </a>`,
+    top: (n, active, count) => `<a href="#${n.id}" ${active ? 'aria-current="page"' : ''} class="flex shrink-0 items-center gap-2 border-b-2 px-3 text-sm font-medium ${active ? 'border-brand-600 text-brand-700' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-900'}">
+        <span class="${active ? 'text-brand-600' : 'text-slate-400'}">${icon(n.id, 'size-4')}</span>${esc(n.label)}
+        ${count ? `<span class="rounded-full ${active ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-600'} px-1.5 py-0.5 text-[11px] leading-none font-semibold" title="${countTitle(n.id)}">${count}</span>` : ''}
+      </a>`,
+  };
+
+  document.querySelectorAll('[data-nav]').forEach((nav) => {
+    const draw = variants[nav.dataset.nav];
+    nav.innerHTML = NAV.map((n) => draw(n, state.view === n.id, counts[n.id])).join('');
+  });
+  document.querySelectorAll('[data-current-view]').forEach((el) => {
+    el.textContent = NAV.find((n) => n.id === state.view)?.label || '';
+  });
 }
 
 function renderLive() {
-  const el = document.getElementById('live');
-  if (!el) return;
-  el.innerHTML = state.live
-    ? `<span class="relative flex size-2"><span class="absolute inline-flex size-full animate-ping rounded-full bg-emerald-400 opacity-60"></span><span class="relative inline-flex size-2 rounded-full bg-emerald-500"></span></span> Live updates on${DEMO ? ' (demo data)' : ''}`
-    : `<span class="size-2 rounded-full bg-slate-300"></span> Connecting…`;
+  const title = state.live ? `Live updates on${DEMO ? ' (demo data)' : ''}` : 'Connecting…';
+  const dotHtml = state.live
+    ? `<span class="relative flex size-2"><span class="absolute inline-flex size-full animate-ping rounded-full bg-emerald-400 opacity-60"></span><span class="relative inline-flex size-2 rounded-full bg-emerald-500"></span></span>`
+    : `<span class="flex size-2 rounded-full bg-slate-300"></span>`;
+  document.querySelectorAll('[data-live]').forEach((el) => {
+    el.title = title;
+    el.innerHTML = el.dataset.live === 'full' ? `${dotHtml} ${esc(title)}` : dotHtml;
+  });
 }
 
 function pageHeader(title, subtitle, actions = '') {
@@ -1388,11 +1492,21 @@ function bindEvents() {
   window.addEventListener('hashchange', () => {
     const view = location.hash.slice(1);
     state.view = VIEWS[view] ? view : 'overview';
+    toggleMobileMenu(false);
     renderView();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') toggleMobileMenu(false);
   });
 
   document.addEventListener('click', async (e) => {
     const t = e.target;
+    const layoutBtn = t.closest('[data-layout-set]');
+    if (layoutBtn) return setLayout(layoutBtn.dataset.layoutSet);
+    if (t.closest('[data-action="mobile-menu-open"]')) return toggleMobileMenu(true);
+    if (t.closest('[data-action="mobile-menu-close"]')) return toggleMobileMenu(false);
+    if (t.closest('#mobile-menu a')) toggleMobileMenu(false); // also when tapping the page you're already on
+
     const signOut = t.closest('[data-action="sign-out"]');
     if (signOut) return DEMO ? toast('Demo mode: nothing to sign out of.') : client.auth.signOut();
 
