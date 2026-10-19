@@ -19,6 +19,7 @@
   const SEP = ';';
   const REFRESH_MS = 15000; // background refresh while the page is visible
   const SELECT_CHECK_MS = 5000; // ticking a speaker triggers a fresh check at most this often
+  const FRESH_CHECKS = false; // true = tick/submit bypass the CDN cache (re-enable after the move to Supabase)
   const DEBUG = new URLSearchParams(location.search).has('speakers-debug');
   // move unavailable speakers to the end of both lists: data-sort="true" (default) | "false"
   const SORT = !(script && script.dataset.sort === 'false');
@@ -309,7 +310,8 @@
     }
 
     async function refresh(fresh) {
-      const url = fresh ? API_URL + (API_URL.includes('?') ? '&' : '?') + 'fresh=' + Date.now() : API_URL;
+      // FRESH_CHECKS off while on the Airtable free plan: every request goes through the CDN cache
+      const url = fresh && FRESH_CHECKS ? API_URL + (API_URL.includes('?') ? '&' : '?') + 'fresh=' + Date.now() : API_URL;
       const res = await fetch(url, { headers: { Accept: 'application/json' } });
       if (!res.ok) throw new Error('Availability API ' + res.status);
       const data = await res.json();

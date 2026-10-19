@@ -21,6 +21,8 @@ const config = () => ({
   token: process.env.AIRTABLE_TOKEN,
   baseId: process.env.AIRTABLE_BASE_ID,
   table: process.env.AIRTABLE_TABLE || 'Speakers',
+  // Airtable free plan allows ~1,000 API calls/month: cache for 5 min by default
+  cacheSeconds: Number(process.env.AVAILABILITY_CACHE_SECONDS ?? 300),
   allowedOrigins: (process.env.ALLOWED_ORIGINS || '')
     .split(',')
     .map((s) => s.trim().replace(/\/$/, ''))
@@ -74,6 +76,12 @@ export function toAvailability(records) {
   return availability;
 }
 
+// Per-instance copy, so requests that skip the CDN cache (e.g. ?fresh=…) don't reach Airtable either
+let memo = null; // { at, availability }
+export const resetCache = () => {
+  memo = null;
+};
+
 export async function GET(request) {
   const cfg = config();
   const origin = request.headers.get('origin');
@@ -86,10 +94,18 @@ export async function GET(request) {
   }
 
   try {
-    const availability = toAvailability(await fetchAllRecords(cfg));
+    const ttl = cfg.cacheSeconds * 1000;
+    if (!memo || Date.now() - memo.at >= ttl) {
+      memo = { at: Date.now(), availability: toAvailability(await fetchAllRecords(cfg)) };
+    }
     return Response.json(
-      { availability },
-      { headers: { ...headers, 'Cache-Control': 'public, s-maxage=10, stale-while-revalidate=30' } },
+      { availability: memo.availability },
+      {
+        headers: {
+          ...headers,
+          'Cache-Control': `public, s-maxage=${cfg.cacheSeconds}, stale-while-revalidate=${cfg.cacheSeconds * 2}`,
+        },
+      },
     );
   } catch (err) {
     console.error(err);

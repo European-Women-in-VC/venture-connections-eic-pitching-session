@@ -1,6 +1,6 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { GET, toAvailability } from '../api/availability.js';
+import { GET, resetCache, toAvailability } from '../api/availability.js';
 
 const realFetch = globalThis.fetch;
 
@@ -9,6 +9,8 @@ beforeEach(() => {
   process.env.AIRTABLE_BASE_ID = 'appTEST';
   process.env.AIRTABLE_TABLE = 'tblTEST';
   process.env.ALLOWED_ORIGINS = 'https://example.com, https://site.webflow.io/';
+  process.env.AVAILABILITY_CACHE_SECONDS = '0'; // no in-memory cache between tests
+  resetCache();
 });
 
 afterEach(() => {
@@ -62,7 +64,7 @@ test('follows Airtable pagination and sets CORS + cache headers', async () => {
   assert.equal(calls[0].auth, 'Bearer test-token');
   assert.equal(new URL(calls[0].url).searchParams.getAll('fields[]').at(-1), 'Capacity Status');
   assert.equal(res.headers.get('access-control-allow-origin'), 'https://site.webflow.io');
-  assert.match(res.headers.get('cache-control'), /s-maxage=10/);
+  assert.match(res.headers.get('cache-control'), /s-maxage=0/);
 });
 
 test('no CORS header for unknown origin', async () => {
@@ -82,4 +84,18 @@ test('500 when env is missing', async () => {
   delete process.env.AIRTABLE_TOKEN;
   const res = await GET(req());
   assert.equal(res.status, 500);
+});
+
+test('caches Airtable results in memory for AVAILABILITY_CACHE_SECONDS (default 300)', async () => {
+  delete process.env.AVAILABILITY_CACHE_SECONDS;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return Response.json({ records: [{ id: 'recA', fields: { Slug: 'a', Capacity: 4, 'Available Places': 4 } }] });
+  };
+  const first = await GET(req('https://example.com'));
+  await GET(new Request('https://api.test/api/availability?fresh=123'));
+  await GET(new Request('https://api.test/api/availability?fresh=456'));
+  assert.equal(calls, 1);
+  assert.match(first.headers.get('cache-control'), /s-maxage=300, stale-while-revalidate=600/);
 });
