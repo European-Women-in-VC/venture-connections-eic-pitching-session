@@ -35,6 +35,7 @@ own handler as a raw backup copy (Webflow Forms + notification email) with a `Bo
 | `public/speakers.js` | Front-end: card ⇄ form checkbox sync, max 4, availability badges, sorting, booking submit. |
 | `public/speakers.css` | Styles for checkboxes, badges, form list, toast. |
 | `webflow/embeds.html` | Snippets to paste into Webflow. |
+| `public/admin/`, `admin/` | Team admin panel (see below). |
 | `dev/` | Local demo page with fake availability (not deployed). |
 | `test/` | Endpoint tests with a mocked Supabase. |
 
@@ -53,6 +54,22 @@ A meeting request takes one of the speaker's places while its status is `new_req
 `hold_awaiting_speaker`, `accepted_scheduling` or `scheduled_confirmed` (function `request_takes_place`).
 `waitlisted`, `declined`, `cancelled` and `expired` free the place. A speaker whose `availability` is not
 `open` can't be booked. `book_meetings` locks the chosen speakers, so two visitors can't take the last place.
+
+## Admin panel (`/admin`)
+
+Team panel for the bookings: overview, meeting requests (status inline), investors, speakers
+(capacity / availability inline), side panel per row, CSV export, live updates.
+
+- Login: Supabase Auth, email + password, invite only. Access: emails in `public.admins`
+  (row-level security, migration `20261020090000_admin_access.sql`).
+- Code: `public/admin/` (plain JS modules, supabase-js from jsDelivr). Styles: Tailwind v4,
+  source `admin/admin.css` → built to `public/admin/admin.css` by `npm run build` (Vercel runs it).
+- Local demo with fake data: `npm run build && python3 -m http.server 4322 --directory public`,
+  then open http://localhost:4322/admin/?demo
+
+Add a team member: Supabase → Authentication → Users → *Invite user*, and add the same email
+(lowercase) to the `admins` table. Supabase → Authentication → URL Configuration must have
+`https://venture-connections-eic-pitching-se.vercel.app/admin/` as Site URL / redirect URL.
 
 ## Webflow
 

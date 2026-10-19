@@ -1,3 +1,5 @@
 .vercel
 .env*
 node_modules
+# built by `npm run build`
+public/admin/admin.css
