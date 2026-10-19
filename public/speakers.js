@@ -9,6 +9,7 @@
  *   data-max="4"        how many speakers can be selected
  *   data-api="…"        availability API URL (default: /api/availability next to this file)
  *   data-book-api="…"   booking API URL (default: /api/book next to this file)
+ *   data-webflow-backup="false"  don't also send a copy to Webflow Forms (default "true")
  * Add ?speakers-debug to the page URL to log slug mismatches.
  */
 (() => {
@@ -24,6 +25,8 @@
   const DEBUG = new URLSearchParams(location.search).has('speakers-debug');
   // move unavailable speakers to the end of both lists: data-sort="true" (default) | "false"
   const SORT = !(script && script.dataset.sort === 'false');
+  // after booking, also submit the form to Webflow Forms as a raw backup copy (+ Webflow's notification email)
+  const WEBFLOW_BACKUP = !(script && script.dataset.webflowBackup === 'false');
 
   function init() {
     const list = document.querySelector('[data-speakers-list]');
@@ -32,6 +35,7 @@
     const selectedField = document.querySelector('[data-speakers-selected]');
     const unselectedField = document.querySelector('[data-speakers-unselected]');
     const recordIdsField = document.querySelector('[data-speakers-record-ids]');
+    const bookingStatusField = document.querySelector('[data-booking-status]');
     const counters = document.querySelectorAll('[data-speakers-counter]');
     const cardToggles = [...document.querySelectorAll('[data-speaker-toggle]')];
     if (!list || !cardToggles.length) return;
@@ -374,6 +378,38 @@
       done.focus({ preventScroll: true });
     }
 
+    // Backup copy: hand the same form to Webflow's own handler (Webflow Forms + notification email).
+    // `bookingSaved`: the booking is in the database, so the visitor sees success even if the copy fails.
+    let passThrough = false;
+    let failWatcher = null; // only for the current copy
+    function sendWebflowCopy(status, bookingSaved) {
+      const btn = form.querySelector('[type="submit"]');
+      // without webflow.js the browser would do a plain GET submit with the data in the URL
+      if (!WEBFLOW_BACKUP || !window.Webflow) {
+        if (bookingSaved) showSuccess();
+        return bookingSaved;
+      }
+      if (bookingStatusField) bookingStatusField.value = status;
+
+      if (failWatcher) failWatcher.disconnect();
+      failWatcher = null;
+      const fail = form.parentElement && form.parentElement.querySelector('.w-form-fail');
+      if (bookingSaved && fail) {
+        const watcher = new MutationObserver(() => {
+          if (getComputedStyle(fail).display === 'none') return;
+          watcher.disconnect();
+          showSuccess();
+        });
+        watcher.observe(fail, { attributes: true, attributeFilter: ['style', 'class'] });
+        setTimeout(() => watcher.disconnect(), 30000);
+        failWatcher = watcher;
+      }
+
+      passThrough = true;
+      form.requestSubmit(btn || undefined);
+      return true;
+    }
+
     async function book() {
       const res = await fetch(BOOK_URL, {
         method: 'POST',
@@ -400,7 +436,11 @@
       form.addEventListener(
         'submit',
         async (e) => {
-          // the booking API replaces Webflow's own form handling
+          if (passThrough) {
+            passThrough = false;
+            return; // backup copy → Webflow's own handler
+          }
+          // the booking API comes first; Webflow only gets a copy afterwards
           e.preventDefault();
           e.stopImmediatePropagation();
           if (sending) return;
@@ -435,7 +475,8 @@
 
           if (result.status === 200 && result.data.ok) {
             if (result.data.unknown && result.data.unknown.length) console.warn('[speakers] not in database:', result.data.unknown);
-            showSuccess();
+            if (result.data.duplicate) showSuccess(); // the first submit already sent the Webflow copy
+            else sendWebflowCopy('booked', true);
             return;
           }
 
@@ -456,7 +497,8 @@
             warn('Please check your email address.');
           } else if (result.data.error === 'invalid_selection') {
             warn('Please select between 1 and ' + MAX + ' speakers.');
-          } else {
+          } else if (!sendWebflowCopy('NOT SAVED: booking API error, enter manually', false)) {
+            // API down and no Webflow backup: nothing was saved
             warn("We couldn't send your request. Please try again in a moment.");
           }
         },

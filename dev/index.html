@@ -42,13 +42,15 @@
       <input type="hidden" name="speakers" data-name="Speakers" data-speakers-hidden>
       <input type="hidden" name="speakers-selected" data-name="Speakers Selected" data-speakers-selected>
       <input type="hidden" name="speakers-unselected" data-name="Speakers Not Selected" data-speakers-unselected>
+      <input type="hidden" name="booking-id" data-name="Booking ID" data-booking-id>
+      <input type="hidden" name="booking-status" data-name="Booking status" data-booking-status>
       <input type="submit" value="Book" data-wait="Please wait...">
     </form>
     <div class="w-form-done" tabindex="-1" role="region" style="display:none">Thank you! Your submission has been received!</div>
     <div class="w-form-fail" style="display:none">Oops! Something went wrong.</div>
   </div>
 
-  <h3>Webflow's own handler (must stay silent now)</h3>
+  <h3>Copy received by Webflow's handler</h3>
   <div id="log">—</div>
 
   <script>
@@ -82,12 +84,24 @@
     document.querySelectorAll('.comps_card-header').forEach((h) =>
       h.addEventListener('click', () => h.parentElement.classList.toggle('is-open')));
 
-    // stand-in for Webflow's submit handler (bubble phase); the booking API replaces it
+    // stand-in for Webflow's submit handler (bubble phase): records the copy, then shows done/fail.
+    // window.webflowShouldFail = true simulates a failed Webflow submission.
+    window.Webflow = window.Webflow || {};
     document.getElementById('booking').addEventListener('submit', (e) => {
       e.preventDefault();
+      const form = e.target;
       const data = {};
-      e.target.querySelectorAll('input:not([type=submit])').forEach((i) => (data[i.dataset.name || i.name] = i.value));
+      form.querySelectorAll('input:not([type=submit])').forEach((i) => (data[i.dataset.name || i.name] = i.value));
       document.getElementById('log').textContent = JSON.stringify(data, null, 2);
+      setTimeout(() => {
+        const block = form.parentElement;
+        if (window.webflowShouldFail) {
+          block.querySelector('.w-form-fail').style.display = 'block';
+        } else {
+          form.style.display = 'none';
+          block.querySelector('.w-form-done').style.display = 'block';
+        }
+      }, 50);
     });
   </script>
   <script>

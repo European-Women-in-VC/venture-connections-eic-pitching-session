@@ -8,8 +8,9 @@
 
 <!-- 2. PAGE SETTINGS → Before </body>
         data-sort="true"  → fully booked / paused / unavailable speakers move to the end of both lists
-        data-sort="false" → keep the Webflow order -->
-<script src="https://venture-connections-eic-pitching-se.vercel.app/speakers.js" data-sort="true" defer></script>
+        data-sort="false" → keep the Webflow order
+        data-webflow-backup="true" → after booking, also send the form to Webflow Forms (raw backup + notification email) -->
+<script src="https://venture-connections-eic-pitching-se.vercel.app/speakers.js" data-sort="true" data-webflow-backup="true" defer></script>
 
 
 <!-- 3. CARD CHECKBOX — Embed inside .comps_card-header-title-wrap (Collection Item) -->
@@ -35,6 +36,10 @@
         The visible inputs are found by their Webflow names (Email, First-Name, Last-Name, Company, LinkedIn)
         or by data-booking-field="email|firstName|lastName|company|linkedin". -->
 <input type="hidden" name="speakers" data-name="Speakers" data-speakers-hidden>
+<input type="hidden" name="speakers-selected" data-name="Speakers Selected" data-speakers-selected>
+<!-- filled for the Webflow backup copy: links it to the Supabase row and says whether it was saved -->
+<input type="hidden" name="booking-id" data-name="Booking ID" data-booking-id>
+<input type="hidden" name="booking-status" data-name="Booking status" data-booking-status>
 
 <!-- optional spam trap: bots fill it, people never see it -->
 <input type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true"

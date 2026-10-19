@@ -10,9 +10,18 @@ Webflow page (CMS cards + form)
   └─ JS     POST /api/book                  ← Supabase function book_meetings() (one transaction)
 ```
 
-The form is submitted by `speakers.js` to `/api/book`, not by Webflow. On success the page shows
-Webflow's own success message; if a speaker was taken in the meantime, nothing is saved and the
-visitor is asked to adjust the selection.
+The form is submitted by `speakers.js` to `/api/book` first. Then the same form is handed to Webflow's
+own handler as a raw backup copy (Webflow Forms + notification email) with a `Booking status` field:
+
+| API result | Webflow copy | Visitor sees |
+|---|---|---|
+| booked | `booked` | success (also if the Webflow copy fails) |
+| duplicate (double submit) | none, sent the first time | success |
+| speaker taken meanwhile (409) | none, nothing saved | toast, adjust and resubmit |
+| invalid email / selection | none | toast |
+| API down / error | `NOT SAVED: booking API error, enter manually` | Webflow's success/error message |
+
+`data-webflow-backup="false"` on the script tag turns the copy off.
 
 ## Structure
 
@@ -54,6 +63,7 @@ See `webflow/embeds.html`. In short:
   - Options on the script tag:
     - `data-sort="true|false"`: move unavailable speakers (full, paused, unavailable) to the end of the cards and the form list. Default `true`.
     - `data-max="4"`: how many speakers can be selected.
+    - `data-webflow-backup="true|false"`: also send each booking to Webflow Forms as a raw backup. Default `true`.
     - `data-api="…"` / `data-book-api="…"`: API URLs (default: derived from the script URL).
 - Add `?speakers-debug` to the page URL to log slugs that don't match the database.
 
