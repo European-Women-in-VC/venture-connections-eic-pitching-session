@@ -8,18 +8,19 @@
  *   data-sort="false"   keep the page order (default "true": unavailable speakers move to the end)
  *   data-max="4"        how many speakers can be selected
  *   data-api="…"        availability API URL (default: /api/availability next to this file)
+ *   data-book-api="…"   booking API URL (default: /api/book next to this file)
  * Add ?speakers-debug to the page URL to log slug mismatches.
  */
 (() => {
   const script = document.currentScript;
-  const API_URL =
-    (script && script.dataset.api) ||
-    (script && script.src ? new URL('/api/availability', script.src).href : '/api/availability');
+  const endpoint = (path) => (script && script.src ? new URL(path, script.src).href : path);
+  const API_URL = (script && script.dataset.api) || endpoint('/api/availability');
+  const BOOK_URL = (script && script.dataset.bookApi) || endpoint('/api/book');
   const MAX = Number((script && script.dataset.max) || 4);
   const SEP = ';';
   const REFRESH_MS = 15000; // background refresh while the page is visible
   const SELECT_CHECK_MS = 5000; // ticking a speaker triggers a fresh check at most this often
-  const FRESH_CHECKS = false; // true = tick/submit bypass the CDN cache (re-enable after the move to Supabase)
+  const FRESH_CHECKS = true; // tick/submit bypass the CDN cache and read the database directly
   const DEBUG = new URLSearchParams(location.search).has('speakers-debug');
   // move unavailable speakers to the end of both lists: data-sort="true" (default) | "false"
   const SORT = !(script && script.dataset.sort === 'false');
@@ -49,11 +50,11 @@
     const blockedMessage = (id) =>
       shortOf(id) + (availability[id].status === 'full' ? ' is fully booked.' : ' is not taking requests right now.');
 
-    if (bookingIdField && !bookingIdField.value) {
-      bookingIdField.value = crypto.randomUUID
-        ? crypto.randomUUID()
-        : Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
-    }
+    // one id per visit: a double submit or retry is saved only once
+    const bookingId =
+      (bookingIdField && bookingIdField.value) ||
+      (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + '-' + Math.random().toString(36).slice(2));
+    if (bookingIdField) bookingIdField.value = bookingId;
 
     // ---------- Collect speakers from cards ----------
     const speakers = new Map();
@@ -310,7 +311,6 @@
     }
 
     async function refresh(fresh) {
-      // FRESH_CHECKS off while on the Airtable free plan: every request goes through the CDN cache
       const url = fresh && FRESH_CHECKS ? API_URL + (API_URL.includes('?') ? '&' : '?') + 'fresh=' + Date.now() : API_URL;
       const res = await fetch(url, { headers: { Accept: 'application/json' } });
       if (!res.ok) throw new Error('Availability API ' + res.status);
@@ -344,19 +344,66 @@
       if (!document.hidden) refresh().catch(console.warn);
     });
 
-    // ---------- Submit: re-check availability, then let Webflow submit ----------
+    // ---------- Submit: book through /api/book, then show Webflow's success message ----------
+    // Form fields: [data-booking-field="email|firstName|lastName|company|linkedin|website"] on the inputs,
+    // otherwise found by their Webflow names. "website" is an optional hidden honeypot.
+    const FIELD_FALLBACKS = {
+      email: 'input[type="email"]',
+      firstName: '[name="First-Name"], [data-name="First Name"]',
+      lastName: '[name="Last-Name"], [data-name="Last Name"]',
+      company: '[name="Company"], [data-name="Company"]',
+      linkedin: '[name="LinkedIn"], [data-name="LinkedIn"]',
+      website: '[name="website"]',
+    };
+    const fieldValue = (key) => {
+      const el = form.querySelector('[data-booking-field="' + key + '"]') || form.querySelector(FIELD_FALLBACKS[key]);
+      return el ? el.value.trim() : '';
+    };
+
+    function showSuccess() {
+      const block = form.parentElement;
+      const done = block && block.querySelector('.w-form-done');
+      const fail = block && block.querySelector('.w-form-fail');
+      if (fail) fail.style.display = 'none';
+      if (!done) {
+        warn('Thank you! Your request has been sent.');
+        return;
+      }
+      form.style.display = 'none';
+      done.style.display = 'block';
+      done.focus({ preventScroll: true });
+    }
+
+    async function book() {
+      const res = await fetch(BOOK_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          bookingId,
+          email: fieldValue('email'),
+          firstName: fieldValue('firstName'),
+          lastName: fieldValue('lastName'),
+          company: fieldValue('company'),
+          linkedin: fieldValue('linkedin'),
+          website: fieldValue('website'),
+          speakers: selected.slice(),
+          page: location.href,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      return { status: res.status, data };
+    }
+
     if (form) {
-      let passThrough = false;
+      let sending = false;
 
       form.addEventListener(
         'submit',
         async (e) => {
-          if (passThrough) {
-            passThrough = false;
-            return; // second pass → Webflow handles it
-          }
+          // the booking API replaces Webflow's own form handling
           e.preventDefault();
           e.stopImmediatePropagation();
+          if (sending) return;
 
           if (!selected.length) {
             warn('Please select at least one speaker.');
@@ -366,29 +413,52 @@
 
           const btn = form.querySelector('[type="submit"]');
           const original = btn ? btn.value : '';
+          sending = true;
           if (btn) {
             btn.disabled = true;
-            btn.value = 'Checking availability…';
+            btn.value = (btn.dataset.wait && btn.dataset.wait.trim()) || 'Sending…';
           }
 
-          let lost = [];
+          let result;
           try {
-            lost = await refresh(true);
+            result = await book();
           } catch (err) {
-            console.warn(err); // API down → don't block, Make still checks
+            console.warn(err);
+            result = { status: 0, data: {} };
           }
 
+          sending = false;
           if (btn) {
             btn.disabled = false;
             btn.value = original;
           }
-          if (lost.length) {
+
+          if (result.status === 200 && result.data.ok) {
+            if (result.data.unknown && result.data.unknown.length) console.warn('[speakers] not in database:', result.data.unknown);
+            showSuccess();
+            return;
+          }
+
+          if (result.status === 409) {
+            // someone else took the last place between the last refresh and now
+            const gone = result.data.unavailable || [];
+            gone.filter((id) => selected.includes(id)).forEach((id) => selected.splice(selected.indexOf(id), 1));
+            await refresh(true).catch(console.warn);
+            warn(
+              (gone.length ? gone.map(shortOf).join(', ') : 'A speaker you picked') +
+                ' just became unavailable and was removed from your selection. Please review and submit again.',
+            );
             list.scrollIntoView({ behavior: 'smooth', block: 'center' });
             return;
           }
 
-          passThrough = true;
-          form.requestSubmit(btn || undefined);
+          if (result.data.error === 'invalid_email') {
+            warn('Please check your email address.');
+          } else if (result.data.error === 'invalid_selection') {
+            warn('Please select between 1 and ' + MAX + ' speakers.');
+          } else {
+            warn("We couldn't send your request. Please try again in a moment.");
+          }
         },
         true,
       );

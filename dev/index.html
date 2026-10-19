@@ -31,19 +31,24 @@
   </div>
   <div class="speakers-form_list" data-speakers-list></div>
 
-  <form id="booking">
-    <input type="text" name="first-name" data-name="First Name" placeholder="First name" required>
-    <input type="text" name="last-name" data-name="Last Name" placeholder="Last name" required>
-    <input type="email" name="email" data-name="Email" placeholder="Email" required>
-    <input type="hidden" name="booking-id" data-name="Booking ID" data-booking-id>
-    <input type="hidden" name="speakers" data-name="Speakers" data-speakers-hidden>
-    <input type="hidden" name="speakers-selected" data-name="Speakers Selected" data-speakers-selected>
-    <input type="hidden" name="speakers-unselected" data-name="Speakers Not Selected" data-speakers-unselected>
-    <input type="hidden" name="speakers-record-ids" data-name="Speakers Record IDs" data-speakers-record-ids>
-    <input type="submit" value="Book">
-  </form>
+  <!-- mirrors Webflow's Form Block: form + success/error messages -->
+  <div class="w-form">
+    <form id="booking">
+      <input type="text" name="First-Name" data-name="First Name" placeholder="First name" required>
+      <input type="text" name="Last-Name" data-name="Last Name" placeholder="Last name" required>
+      <input type="email" name="email" data-name="Email" placeholder="Email" required>
+      <input type="text" name="Company" data-name="Company" placeholder="Company" required>
+      <input type="text" name="LinkedIn" data-name="LinkedIn" placeholder="LinkedIn" required>
+      <input type="hidden" name="speakers" data-name="Speakers" data-speakers-hidden>
+      <input type="hidden" name="speakers-selected" data-name="Speakers Selected" data-speakers-selected>
+      <input type="hidden" name="speakers-unselected" data-name="Speakers Not Selected" data-speakers-unselected>
+      <input type="submit" value="Book" data-wait="Please wait...">
+    </form>
+    <div class="w-form-done" tabindex="-1" role="region" style="display:none">Thank you! Your submission has been received!</div>
+    <div class="w-form-fail" style="display:none">Oops! Something went wrong.</div>
+  </div>
 
-  <h3>Submitted (simulated Webflow handler)</h3>
+  <h3>Webflow's own handler (must stay silent now)</h3>
   <div id="log">—</div>
 
   <script>
@@ -77,7 +82,7 @@
     document.querySelectorAll('.comps_card-header').forEach((h) =>
       h.addEventListener('click', () => h.parentElement.classList.toggle('is-open')));
 
-    // stand-in for Webflow's submit handler (bubble phase)
+    // stand-in for Webflow's submit handler (bubble phase); the booking API replaces it
     document.getElementById('booking').addEventListener('submit', (e) => {
       e.preventDefault();
       const data = {};

@@ -31,12 +31,14 @@
 <div class="speaker-availability" data-availability></div>
 
 
-<!-- 5. FORM HIDDEN FIELDS — Embed inside the <form> -->
-<input type="hidden" name="booking-id" data-name="Booking ID" data-booking-id>
+<!-- 5. FORM HIDDEN FIELDS — optional since the form is sent by speakers.js to /api/book.
+        The visible inputs are found by their Webflow names (Email, First-Name, Last-Name, Company, LinkedIn)
+        or by data-booking-field="email|firstName|lastName|company|linkedin". -->
 <input type="hidden" name="speakers" data-name="Speakers" data-speakers-hidden>
-<input type="hidden" name="speakers-selected" data-name="Speakers Selected" data-speakers-selected>
-<input type="hidden" name="speakers-unselected" data-name="Speakers Not Selected" data-speakers-unselected>
-<input type="hidden" name="speakers-record-ids" data-name="Speakers Record IDs" data-speakers-record-ids>
+
+<!-- optional spam trap: bots fill it, people never see it -->
+<input type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true"
+       style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">
 
 <!--
   6. FORM STRUCTURE (built in Webflow, not an Embed)
