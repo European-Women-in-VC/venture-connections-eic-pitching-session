@@ -68,6 +68,20 @@ Team panel for the bookings: overview, meeting requests (status inline), investo
 - Local demo with fake data: `npm run build && python3 -m http.server 4322 --directory public`,
   then open http://localhost:4322/eic-team-4k9p/?demo
 
+**Archive, not delete.** The panel archives investors and speakers (`archived_at`, `archived_by`) and can
+restore them; archived investors' requests stop taking places, archived speakers are closed. Panel users have
+no DELETE permission: permanent deletes only in Supabase (Table Editor / SQL).
+
+**Sources and history.** Investors and requests have `source` = `website` or `panel` (team) and `created_by`.
+`submission_events` logs every website submission exactly as sent (raw form) and every team addition.
+A repeat submission with the same email joins the existing (non-archived) investor: new speakers are added,
+existing ones are skipped. Team additions go through `panel_add_requests()` / `panel_create_investor()`.
+
+**Backups.** `pg_cron` runs `backup.take_snapshot()` daily at 02:15 UTC: all tables as JSON in
+`backup.snapshots` (kept 30 days, not exposed to the API). Restore a table from the latest snapshot, e.g.
+`select jsonb_array_elements(data->'submissions') from backup.snapshots order by taken_at desc limit 1`.
+The panel's Overview → *Download backup* gives an offsite JSON copy of everything.
+
 **Compare with website** (Speakers page): reads the speaker cards on the published Webflow page
 (`GET /api/website-speakers?source=live|staging`, from the card embed's `data-speaker*` attributes) and
 suggests: add new cards, update changed names/companies, follow slug changes (same name → bookings kept),

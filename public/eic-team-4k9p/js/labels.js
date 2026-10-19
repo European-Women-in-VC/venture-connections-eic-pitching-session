@@ -79,16 +79,23 @@ export const TAKES_PLACE = new Set(REQUEST_STATUSES.filter((s) => s.takesPlace).
 export const CONFIRMED = new Set(['accepted_scheduling', 'scheduled_confirmed']);
 export const CLOSED = new Set(['declined', 'cancelled', 'expired']);
 
-// Same rules as the public.speaker_availability view (used by the demo data)
-export function computeAvailability(speaker, requests) {
-  const mine = requests.filter((r) => r.speaker_id === speaker.id);
+export const SOURCES = {
+  website: { label: 'Website', title: 'Submitted on the website' },
+  panel: { label: 'Team', title: 'Added by the team in this panel' },
+};
+
+// Same rules as the public.speaker_availability view (used by the demo data):
+// requests of archived investors don't count, archived speakers are closed.
+export function computeAvailability(speaker, requests, archivedSubmissionIds = new Set()) {
+  const mine = requests.filter((r) => r.speaker_id === speaker.id && !archivedSubmissionIds.has(r.submission_id));
   const used = mine.filter((r) => TAKES_PLACE.has(r.status)).length;
   const confirmed = mine.filter((r) => CONFIRMED.has(r.status)).length;
   const waitlisted = mine.filter((r) => r.status === 'waitlisted').length;
   const remaining = Math.max(speaker.capacity - used, 0);
-  const available = speaker.availability === 'open' ? remaining : 0;
+  const available = !speaker.archived_at && speaker.availability === 'open' ? remaining : 0;
   let status = 'available';
-  if (used > speaker.capacity) status = 'over_capacity';
+  if (speaker.archived_at) status = 'closed';
+  else if (used > speaker.capacity) status = 'over_capacity';
   else if (speaker.availability !== 'open') status = speaker.availability;
   else if (speaker.capacity - used <= 0) status = 'full';
   return { id: speaker.id, used, confirmed, waitlisted, remaining, available, status };

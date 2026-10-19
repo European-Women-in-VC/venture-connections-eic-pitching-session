@@ -4,7 +4,7 @@
 // Request JSON:
 //   { bookingId, email, firstName, lastName, company?, linkedin?, speakers: ["slug", …], website? (honeypot) }
 // Responses:
-//   200 { ok: true, duplicate?: true, unknown?: [slugs not in the database] }
+//   200 { ok: true, duplicate, repeat, already: [slugs requested before], unknown: [slugs not in the database] }
 //   409 { ok: false, error: "unavailable", unavailable: [slugs] }   nothing saved
 //   422 { ok: false, error: "invalid_email" | "invalid_selection" | "invalid_request" }
 //   403 { ok: false, error: "forbidden" }                            origin not in ALLOWED_ORIGINS
@@ -78,7 +78,13 @@ export async function POST(request) {
     });
 
     if (result && result.ok) {
-      return reply(200, { ok: true, duplicate: Boolean(result.duplicate), unknown: result.unknown || [] });
+      return reply(200, {
+        ok: true,
+        duplicate: Boolean(result.duplicate),
+        repeat: Boolean(result.repeat), // same email booked before → added to that investor
+        already: result.already || [], // speakers this investor had requested before
+        unknown: result.unknown || [],
+      });
     }
     if (result && result.error === 'unavailable') {
       return reply(409, { ok: false, error: 'unavailable', unavailable: result.unavailable || [] });

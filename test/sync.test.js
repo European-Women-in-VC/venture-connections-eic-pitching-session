@@ -97,3 +97,13 @@ test('changeFor turns suggestions into database changes', () => {
   });
   assert.deepEqual(changeFor(suggestions.find((s) => s.type === 'missing')), { id: '4', update: { availability: 'closed' } });
 });
+
+test('archived speakers: restore when the card is on the website, ignore otherwise', () => {
+  const dbWithArchive = [
+    { id: 'a', slug: 'back', name: 'Back Again', company: 'Old Co', availability: 'open', archived_at: '2026-10-01T00:00:00Z' },
+    { id: 'b', slug: 'gone-for-good', name: 'Gone', company: 'G', availability: 'open', archived_at: '2026-10-01T00:00:00Z' },
+  ];
+  const { suggestions } = diffSpeakers(dbWithArchive, [{ slug: 'back', name: 'Back Again', company: 'New Co' }]);
+  assert.deepEqual(suggestions.map((s) => [s.type, s.speaker.slug]), [['restore', 'back']]);
+  assert.deepEqual(changeFor(suggestions[0]), { id: 'a', update: { company: 'New Co', archived_at: null } });
+});

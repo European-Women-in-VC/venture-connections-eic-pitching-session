@@ -15,6 +15,7 @@ import {
   DOTS,
   REQUEST_STATUS,
   REQUEST_STATUSES,
+  SOURCES,
   SPEAKER_STATE,
   SPEAKER_STATES,
   SUBMISSION_STATUS,
@@ -50,11 +51,11 @@ const state = {
   user: null,
   live: false,
   loaded: false,
-  data: { speakers: [], availability: [], submissions: [], requests: [], admins: [] },
+  data: { speakers: [], availability: [], submissions: [], requests: [], events: [], admins: [] },
   view: 'overview',
   filters: {
-    requests: { q: '', chip: 'active', speaker: '', sort: { key: 'created', dir: 'desc' } },
-    investors: { q: '', chip: 'all', sort: { key: 'created', dir: 'desc' } },
+    requests: { q: '', chip: 'active', speaker: '', source: '', sort: { key: 'created', dir: 'desc' } },
+    investors: { q: '', chip: 'all', source: '', sort: { key: 'created', dir: 'desc' } },
     speakers: { q: '', chip: 'all', sort: { key: 'name', dir: 'asc' } },
   },
 };
@@ -162,7 +163,10 @@ const errorText = (err) => {
   if (/speakers_slug_key|duplicate key.*slug/i.test(msg)) return 'A speaker with this slug already exists.';
   if (/foreign key/i.test(msg)) return 'This speaker still has meeting requests, so it can’t be deleted.';
   if (/speakers_slug_check|check constraint.*slug/i.test(msg)) return 'Slug may only contain lowercase letters, numbers and single dashes.';
-  if (/JWT|not authorized|permission|row-level security|PGRST116/i.test(msg)) return 'You don’t have permission for this change. Try signing in again.';
+  if (/investor_exists/.test(msg)) return 'An investor with this email already exists. Open their card and add speakers there.';
+  if (/investor_not_found/.test(msg)) return 'This investor is archived or no longer exists.';
+  if (/invalid_email/.test(msg)) return 'Please enter a valid email address.';
+  if (/JWT|not authorized|not_allowed|permission|row-level security|PGRST116/i.test(msg)) return 'You don’t have permission for this change. Try signing in again.';
   return msg;
 };
 
@@ -170,7 +174,20 @@ const errorText = (err) => {
 // Derived data
 // ---------------------------------------------------------------------------
 function derived() {
-  const { speakers, availability, submissions, requests } = state.data;
+  const { speakers, availability, submissions, requests, events = [] } = state.data;
+  const archivedSubs = new Set(submissions.filter((s) => s.archived_at).map((s) => s.id));
+  // "live" = not archived: what the lists, totals and dropdowns show
+  const live = {
+    speakers: speakers.filter((s) => !s.archived_at),
+    submissions: submissions.filter((s) => !s.archived_at),
+    requests: requests.filter((r) => !archivedSubs.has(r.submission_id)),
+  };
+  const eventsBySubmission = new Map();
+  for (const e of events) {
+    if (!eventsBySubmission.has(e.submission_id)) eventsBySubmission.set(e.submission_id, []);
+    eventsBySubmission.get(e.submission_id).push(e);
+  }
+  const websiteSends = (id) => (eventsBySubmission.get(id) || []).filter((e) => e.source === 'website').length;
   const speakerById = new Map(speakers.map((s) => [s.id, s]));
   const submissionById = new Map(submissions.map((s) => [s.id, s]));
   const availabilityById = new Map(availability.map((a) => [a.id, a]));
@@ -183,8 +200,22 @@ function derived() {
     requestsBySpeaker.get(r.speaker_id).push(r);
   }
   for (const list of requestsBySubmission.values()) list.sort((a, b) => (a.preference_rank || 99) - (b.preference_rank || 99));
-  return { speakerById, submissionById, availabilityById, requestsBySubmission, requestsBySpeaker };
+  return { speakerById, submissionById, availabilityById, requestsBySubmission, requestsBySpeaker, live, eventsBySubmission, websiteSends };
 }
+
+const sourceBadge = (source, by) =>
+  source === 'panel'
+    ? `<span class="inline-flex items-center rounded px-1.5 py-0.5 text-[11px] leading-4 font-medium bg-brand-50 text-brand-700 ring-1 ring-inset ring-brand-600/20" title="${esc(SOURCES.panel.title + (by ? ' — ' + by : ''))}">${SOURCES.panel.label}</span>`
+    : `<span class="inline-flex items-center rounded px-1.5 py-0.5 text-[11px] leading-4 font-medium bg-slate-50 text-slate-500 ring-1 ring-inset ring-slate-300/70" title="${esc(SOURCES.website.title)}">${SOURCES.website.label}</span>`;
+const sendsBadge = (n) =>
+  n > 1
+    ? `<span class="inline-flex items-center rounded px-1.5 py-0.5 text-[11px] leading-4 font-medium bg-amber-50 text-amber-800 ring-1 ring-inset ring-amber-600/25" title="Submitted the website form ${n} times">Sent ${n}×</span>`
+    : '';
+const sourceFilter = (view) => `<select data-filter-source="${view}" class="${SELECT} w-full sm:w-48" aria-label="Source">
+    <option value="">All sources</option>
+    <option value="website" ${state.filters[view].source === 'website' ? 'selected' : ''}>From the website</option>
+    <option value="panel" ${state.filters[view].source === 'panel' ? 'selected' : ''}>Added by the team</option>
+  </select>`;
 
 const statusOrder = Object.fromEntries(REQUEST_STATUSES.map((s, i) => [s.value, i]));
 const compare = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
@@ -439,7 +470,7 @@ function toggleMobileMenu(open) {
 }
 
 function renderNav() {
-  const { requests, submissions } = state.data;
+  const { requests, submissions } = derived().live;
   const counts = {
     requests: requests.filter((r) => r.status === 'new_request' || r.status === 'needs_review').length,
     investors: submissions.filter((s) => s.status === 'todo').length,
@@ -564,8 +595,8 @@ const tableWrap = (head, body) => `
 // ---------------------------------------------------------------------------
 function renderOverview() {
   const main = document.getElementById('main');
-  const { speakers, submissions, requests } = state.data;
   const d = derived();
+  const { speakers, submissions, requests } = d.live;
   const realSubs = submissions.filter((s) => s.status !== 'test');
   const today = realSubs.filter((s) => Date.now() - new Date(s.created_at) < 86400000).length;
   const active = requests.filter((r) => TAKES_PLACE.has(r.status)).length;
@@ -590,7 +621,11 @@ function renderOverview() {
     .sort((x, y) => (y.a?.used || 0) / Math.max(y.s.capacity, 1) - (x.a?.used || 0) / Math.max(x.s.capacity, 1) || x.s.name.localeCompare(y.s.name));
 
   main.innerHTML =
-    pageHeader('Overview', 'Investor bookings and speaker capacity at a glance.') +
+    pageHeader(
+      'Overview',
+      'Investor bookings and speaker capacity at a glance.',
+      `<button data-action="download-backup" class="${BTN_SECONDARY}" title="Everything in one JSON file, including archived items and history">${icon('download', 'size-4')} Download backup</button>`,
+    ) +
     `<div class="space-y-6 p-6">
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-5">
         ${kpi('Investors', realSubs.length, today ? `+${today} in the last 24 h` : 'no new in the last 24 h', '#investors')}
@@ -679,14 +714,20 @@ const REQUEST_CHIPS = [
   { id: 'closed', label: 'Declined / cancelled / expired', tone: 'gray', test: (r) => CLOSED.has(r.status) },
 ];
 
+const requestChipItems = () => {
+  const reqs = derived().live.requests;
+  return REQUEST_CHIPS.map((c) => ({ ...c, count: reqs.filter(c.test).length }));
+};
+
 function requestRows() {
   const f = state.filters.requests;
   const d = derived();
   const chip = REQUEST_CHIPS.find((c) => c.id === f.chip) || REQUEST_CHIPS[0];
-  const rows = state.data.requests
+  const rows = d.live.requests
     .map((r) => ({ r, sub: d.submissionById.get(r.submission_id), sp: d.speakerById.get(r.speaker_id) }))
     .filter(({ r }) => chip.test(r))
     .filter(({ r }) => !f.speaker || r.speaker_id === f.speaker)
+    .filter(({ r }) => !f.source || r.source === f.source)
     .filter(({ r, sub, sp }) => matches(f.q, fullName(sub), sub?.email, sub?.company, sp?.name, sp?.company, r.internal_notes, r.request_number));
   return sortRows(
     rows,
@@ -704,22 +745,24 @@ function requestRows() {
 
 function renderRequests() {
   const main = document.getElementById('main');
-  const { requests, speakers } = state.data;
+  const { speakers } = derived().live;
   const f = state.filters.requests;
   main.innerHTML =
     pageHeader(
       'Meeting requests',
       'One row per investor × speaker. Change the status right in the table.',
-      `<button data-export="requests" class="${BTN_SECONDARY}">${icon('download', 'size-4')} Export CSV</button>`,
+      `<button data-export="requests" class="${BTN_SECONDARY}">${icon('download', 'size-4')} Export CSV</button>
+       <button data-action="new-request" class="${BTN_PRIMARY}">${icon('plus', 'size-4')} New meeting request</button>`,
     ) +
     `<div class="space-y-4 p-6">
-      <div id="chips">${chips('requests', REQUEST_CHIPS.map((c) => ({ ...c, count: requests.filter(c.test).length })))}</div>
+      <div id="chips">${chips('requests', requestChipItems())}</div>
       <div class="flex flex-wrap items-center gap-3">
         ${searchBox('requests', 'Search investor, speaker, notes…')}
         <select data-filter-speaker class="${SELECT} w-full sm:w-64">
           <option value="">All speakers</option>
           ${speakers.map((s) => `<option value="${s.id}" ${f.speaker === s.id ? 'selected' : ''}>${esc(s.name)} · ${esc(s.company)}</option>`).join('')}
         </select>
+        ${sourceFilter('requests')}
         <span id="count" class="ml-auto text-sm text-slate-500"></span>
       </div>
       <div id="view-body"></div>
@@ -736,8 +779,9 @@ function renderRequestsBody() {
     ${sortHeader('requests', 'speaker', 'Speaker')}
     ${sortHeader('requests', 'rank', 'Pref.', 'w-16')}
     ${sortHeader('requests', 'status', 'Status')}
+    <th class="px-4 py-2.5 text-left font-medium">Source</th>
     <th class="px-4 py-2.5 text-left font-medium">Notes</th>
-    ${sortHeader('requests', 'created', 'Submitted')}
+    ${sortHeader('requests', 'created', 'Created')}
   </tr>`;
   const body = rows.length
     ? rows
@@ -748,12 +792,13 @@ function renderRequestsBody() {
           <td class="whitespace-nowrap px-4 py-3"><div>${esc(sp?.name || '—')}</div><div class="text-xs text-slate-500">${esc(sp?.company || '')}</div></td>
           <td class="px-4 py-3 text-slate-500 tabular-nums">${r.preference_rank ? '#' + r.preference_rank : '—'}</td>
           <td class="px-4 py-3" data-stop>${statusSelect('request', r.id, r.status)}</td>
+          <td class="px-4 py-3">${sourceBadge(r.source, r.created_by)}</td>
           <td class="max-w-64 px-4 py-3"><p class="truncate text-slate-500">${esc(r.internal_notes || '')}</p></td>
           <td class="whitespace-nowrap px-4 py-3 text-slate-500" title="${esc(fmtDate(r.created_at))}">${esc(timeAgo(r.created_at))}</td>
         </tr>`,
         )
         .join('')
-    : emptyRow(7, state.data.requests.length ? 'No requests match these filters.' : 'No meeting requests yet. They appear here as soon as an investor books.');
+    : emptyRow(8, state.data.requests.length ? 'No requests match these filters.' : 'No meeting requests yet. They appear here as soon as an investor books.');
   document.getElementById('view-body').innerHTML = tableWrap(head, body);
 }
 
@@ -761,9 +806,11 @@ function renderRequestsBody() {
 // Investors
 // ---------------------------------------------------------------------------
 const INVESTOR_CHIPS = [
-  { id: 'all', label: 'All', test: (s) => s.status !== 'test' },
-  ...SUBMISSION_STATUSES.map((s) => ({ id: s.value, label: s.label, tone: s.tone, test: (x) => x.status === s.value })),
+  { id: 'all', label: 'All', test: (s) => !s.archived_at && s.status !== 'test' },
+  ...SUBMISSION_STATUSES.map((s) => ({ id: s.value, label: s.label, tone: s.tone, test: (x) => !x.archived_at && x.status === s.value })),
+  { id: 'archived', label: 'Archived', tone: 'gray', test: (s) => Boolean(s.archived_at) },
 ];
+const investorChipItems = () => INVESTOR_CHIPS.map((c) => ({ ...c, count: state.data.submissions.filter(c.test).length }));
 
 function investorRows() {
   const f = state.filters.investors;
@@ -772,6 +819,7 @@ function investorRows() {
   const rows = state.data.submissions
     .map((s) => ({ s, reqs: d.requestsBySubmission.get(s.id) || [] }))
     .filter(({ s }) => chip.test(s))
+    .filter(({ s }) => !f.source || s.source === f.source)
     .filter(({ s, reqs }) =>
       matches(f.q, fullName(s), s.email, s.company, s.linkedin, s.notes, ...reqs.map((r) => d.speakerById.get(r.speaker_id)?.name)),
     );
@@ -794,13 +842,15 @@ function renderInvestors() {
   main.innerHTML =
     pageHeader(
       'Investors',
-      'Everyone who submitted the booking form, with the speakers they picked.',
-      `<button data-export="investors" class="${BTN_SECONDARY}">${icon('download', 'size-4')} Export CSV</button>`,
+      'Everyone who booked on the website or was added by the team, with the speakers they asked for.',
+      `<button data-export="investors" class="${BTN_SECONDARY}">${icon('download', 'size-4')} Export CSV</button>
+       <button data-action="new-investor" class="${BTN_PRIMARY}">${icon('plus', 'size-4')} New investor</button>`,
     ) +
     `<div class="space-y-4 p-6">
-      <div id="chips">${chips('investors', INVESTOR_CHIPS.map((c) => ({ ...c, count: submissions.filter(c.test).length })))}</div>
+      <div id="chips">${chips('investors', investorChipItems())}</div>
       <div class="flex flex-wrap items-center gap-3">
         ${searchBox('investors', 'Search name, email, company, speaker…')}
+        ${sourceFilter('investors')}
         <span id="count" class="ml-auto text-sm text-slate-500"></span>
       </div>
       <div id="view-body"></div>
@@ -817,7 +867,7 @@ function renderInvestorsBody() {
     ${sortHeader('investors', 'email', 'Contact')}
     ${sortHeader('investors', 'speakers', 'Speakers requested')}
     ${sortHeader('investors', 'status', 'Status')}
-    ${sortHeader('investors', 'created', 'Submitted')}
+    ${sortHeader('investors', 'created', 'Created')}
   </tr>`;
   const body = rows.length
     ? rows
@@ -827,7 +877,11 @@ function renderInvestorsBody() {
             <td class="px-4 py-3">
               <div class="flex items-center gap-3">
                 <span class="flex size-8 shrink-0 items-center justify-center rounded-full bg-brand-50 text-xs font-semibold text-brand-700">${esc(initials(s))}</span>
-                <div class="whitespace-nowrap"><div class="font-medium">${esc(fullName(s))}</div><div class="text-xs text-slate-500">${esc(s.company || '')}</div></div>
+                <div class="whitespace-nowrap">
+                  <div class="font-medium">${esc(fullName(s))}</div>
+                  <div class="text-xs text-slate-500">${esc(s.company || '')}</div>
+                  <div class="mt-1 flex gap-1">${sourceBadge(s.source, s.created_by)}${sendsBadge(d.websiteSends(s.id))}${s.archived_at ? pill('Archived', 'gray') : ''}</div>
+                </div>
               </div>
             </td>
             <td class="px-4 py-3" data-stop>
@@ -859,11 +913,16 @@ function renderInvestorsBody() {
 // ---------------------------------------------------------------------------
 const speakerStatus = (s, d) => d.availabilityById.get(s.id)?.status || 'available';
 const SPEAKER_CHIPS = [
-  { id: 'all', label: 'All', test: () => true },
-  { id: 'available', label: 'Available', tone: 'green', test: (s, d) => speakerStatus(s, d) === 'available' },
-  { id: 'full', label: 'Full', tone: 'red', test: (s, d) => ['full', 'over_capacity'].includes(speakerStatus(s, d)) },
-  { id: 'off', label: 'Paused / closed', tone: 'gray', test: (s) => s.availability !== 'open' },
+  { id: 'all', label: 'All', test: (s) => !s.archived_at },
+  { id: 'available', label: 'Available', tone: 'green', test: (s, d) => !s.archived_at && speakerStatus(s, d) === 'available' },
+  { id: 'full', label: 'Full', tone: 'red', test: (s, d) => !s.archived_at && ['full', 'over_capacity'].includes(speakerStatus(s, d)) },
+  { id: 'off', label: 'Paused / closed', tone: 'gray', test: (s) => !s.archived_at && s.availability !== 'open' },
+  { id: 'archived', label: 'Archived', tone: 'gray', test: (s) => Boolean(s.archived_at) },
 ];
+const speakerChipItems = () => {
+  const d = derived();
+  return SPEAKER_CHIPS.map((c) => ({ ...c, count: state.data.speakers.filter((s) => c.test(s, d)).length }));
+};
 
 function speakerRows() {
   const f = state.filters.speakers;
@@ -898,7 +957,7 @@ function renderSpeakers() {
        <button data-action="new-speaker" class="${BTN_PRIMARY}">${icon('plus', 'size-4')} Add speaker</button>`,
     ) +
     `<div class="space-y-4 p-6">
-      <div id="chips">${chips('speakers', SPEAKER_CHIPS.map((c) => ({ ...c, count: state.data.speakers.filter((s) => c.test(s, d)).length })))}</div>
+      <div id="chips">${chips('speakers', speakerChipItems())}</div>
       <div class="flex flex-wrap items-center gap-3">
         ${searchBox('speakers', 'Search name, company, slug…')}
         <span id="count" class="ml-auto text-sm text-slate-500"></span>
@@ -934,7 +993,7 @@ function renderSpeakersBody() {
             <td class="px-4 py-3"><div class="flex items-center gap-3"><div class="w-28">${capacityBar(s, a)}</div><span class="text-xs font-semibold tabular-nums text-slate-600">${a?.used || 0}/${s.capacity}</span></div></td>
             <td class="px-4 py-3 tabular-nums text-slate-600">${a?.confirmed || 0}</td>
             <td class="px-4 py-3 tabular-nums text-slate-600">${a?.waitlisted || 0}</td>
-            <td class="px-4 py-3">${a?.status === 'available' ? `<span class="text-xs text-slate-500">${a.available} place${a.available === 1 ? '' : 's'} left</span>` : pill(st.label, st.tone)}</td>
+            <td class="px-4 py-3">${s.archived_at ? pill('Archived', 'gray') : a?.status === 'available' ? `<span class="text-xs text-slate-500">${a.available} place${a.available === 1 ? '' : 's'} left</span>` : pill(st.label, st.tone)}</td>
           </tr>`;
         })
         .join('')
@@ -1072,33 +1131,117 @@ function openRequest(id) {
   });
 }
 
+const archivedBanner = (row, kind) =>
+  row.archived_at
+    ? `<div class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm">
+        <span class="text-slate-600">Archived ${esc(fmtDate(row.archived_at))}${row.archived_by ? ` by ${esc(row.archived_by)}` : ''}. ${kind === 'investor' ? 'Their requests don’t take places.' : 'Can’t be booked on the website.'}</span>
+        <button type="button" data-action="restore-${kind}" data-id="${row.id}" class="${BTN_SECONDARY} py-1.5">Restore</button>
+      </div>`
+    : '';
+
+const availabilityNote = (sp, d) => {
+  const a = d.availabilityById.get(sp.id);
+  if (!a) return '';
+  if (a.status === 'available') return `${a.available} left`;
+  return (CAPACITY_STATUSES[a.status] || CAPACITY_STATUSES.closed).label.toLowerCase();
+};
+
+function historyList(sub, d) {
+  const events = d.eventsBySubmission.get(sub.id) || [];
+  if (!events.length) return '<p class="text-sm text-slate-500">No history yet.</p>';
+  const names = (slugs) =>
+    (slugs || []).map((slug) => {
+      const sp = state.data.speakers.find((x) => x.slug === slug);
+      return esc(sp ? `${sp.name} (${sp.company})` : slug);
+    });
+  const RAW_LABELS = { firstName: 'First name', lastName: 'Last name', email: 'Email', company: 'Company', linkedin: 'LinkedIn', speakers: 'Speakers', page: 'Page', userAgent: 'Browser' };
+  return `<ol class="space-y-3">${events
+    .map((e) => {
+      const website = e.source === 'website';
+      const action = website
+        ? 'Submitted the website form'
+        : e.payload?.action === 'create_investor'
+          ? 'Investor created by the team'
+          : 'Speakers added by the team';
+      const raw = website
+        ? `<details class="mt-2 text-xs">
+            <summary class="cursor-pointer text-slate-500 hover:text-slate-800">Original submission</summary>
+            <dl class="mt-2 rounded-md bg-slate-50 px-3 py-1.5">${Object.entries(RAW_LABELS)
+              .filter(([k]) => e.payload?.[k] !== undefined && e.payload?.[k] !== null && e.payload?.[k] !== '')
+              .map(([k, label]) => infoRow(label, esc(Array.isArray(e.payload[k]) ? e.payload[k].join(', ') : e.payload[k])))
+              .join('')}${e.booking_id ? infoRow('Booking ID', `<span class="font-mono">${esc(e.booking_id)}</span>`) : ''}</dl>
+          </details>`
+        : e.payload?.note
+          ? `<p class="mt-1 text-xs text-slate-600">Note: ${esc(e.payload.note)}</p>`
+          : '';
+      return `<li class="rounded-lg border border-slate-200 px-3 py-2.5">
+        <div class="flex flex-wrap items-center gap-2 text-sm">
+          ${sourceBadge(e.source, e.created_by)}
+          <span class="font-medium">${action}</span>
+          <span class="ml-auto text-xs text-slate-500" title="${esc(fmtDate(e.created_at))}">${esc(fmtDate(e.created_at))}</span>
+        </div>
+        ${e.created_by ? `<p class="mt-0.5 text-xs text-slate-500">by ${esc(e.created_by)}</p>` : ''}
+        ${e.added_slugs?.length ? `<p class="mt-1 text-xs text-slate-600"><span class="text-slate-500">Added:</span> ${names(e.added_slugs).join(', ')}</p>` : ''}
+        ${e.skipped_slugs?.length ? `<p class="mt-0.5 text-xs text-slate-600"><span class="text-slate-500">Already requested:</span> ${names(e.skipped_slugs).join(', ')}</p>` : ''}
+        ${raw}
+      </li>`;
+    })
+    .join('')}</ol>`;
+}
+
 function openInvestor(id) {
   const d = derived();
   const s = state.data.submissions.find((x) => x.id === id);
   if (!s) return;
   const reqs = d.requestsBySubmission.get(s.id) || [];
-  const meta = s.meta || {};
+  const have = new Set(reqs.map((r) => r.speaker_id));
+  const candidates = d.live.speakers.filter((sp) => !have.has(sp.id));
+  const sends = d.websiteSends(s.id);
+
+  const addSpeakerForm = s.archived_at
+    ? ''
+    : candidates.length
+      ? `<div class="mt-3 rounded-lg border border-dashed border-slate-300 p-3" data-add-requests="${s.id}">
+          <p class="mb-2 text-xs font-medium text-slate-600">Add a speaker (e.g. asked by email)</p>
+          <div class="grid gap-2 sm:grid-cols-[1fr_auto]">
+            <select data-add-speaker class="${SELECT}">
+              ${candidates.map((sp) => `<option value="${sp.id}">${esc(sp.name)} · ${esc(sp.company)} — ${esc(availabilityNote(sp, d))}</option>`).join('')}
+            </select>
+            <select data-add-status class="${SELECT}">${REQUEST_STATUSES.filter((x) => !CLOSED.has(x.value)).map((x) => `<option value="${x.value}">${esc(x.label)}</option>`).join('')}</select>
+          </div>
+          <div class="mt-2 grid gap-2 sm:grid-cols-[1fr_auto]">
+            <input data-add-note placeholder="Note (optional), e.g. “asked by email on 21 Oct”" class="${INPUT}">
+            <button type="button" data-action="add-requests" class="${BTN_PRIMARY}">${icon('plus', 'size-4')} Add</button>
+          </div>
+          <p class="mt-2 hidden text-xs text-amber-700" data-add-warning></p>
+        </div>`
+      : `<p class="mt-3 text-xs text-slate-500">They already have a request for every speaker.</p>`;
+
   openDrawer({
     title: esc(fullName(s)),
-    subtitle: esc([s.company, `submitted ${fmtDate(s.created_at)}`].filter(Boolean).join(' · ')),
+    subtitle: esc([s.company, s.email].filter(Boolean).join(' · ')),
     body:
+      archivedBanner(s, 'investor') +
+      `<div class="flex flex-wrap gap-1.5">${sourceBadge(s.source, s.created_by)}${sendsBadge(sends)}
+        <span class="text-xs text-slate-500">${s.source === 'panel' ? `Added ${esc(fmtDate(s.created_at))}${s.created_by ? ` by ${esc(s.created_by)}` : ''}` : `First submitted ${esc(fmtDate(s.created_at))}`}</span>
+      </div>` +
       section(
-        'Requested speakers',
-        reqs.length
+        `Requested speakers (${reqs.length})`,
+        (reqs.length
           ? `<ul class="divide-y divide-slate-100 rounded-lg border border-slate-200">${reqs
               .map((r) => {
                 const sp = d.speakerById.get(r.speaker_id);
                 return `<li class="flex items-center gap-3 px-3 py-2.5">
                   <span class="w-6 text-xs tabular-nums text-slate-400">#${r.preference_rank || '–'}</span>
                   <button type="button" data-open="request" data-id="${r.id}" class="min-w-0 flex-1 text-left">
-                    <span class="block truncate text-sm font-medium hover:text-brand-600">${esc(sp?.name || '?')}</span>
+                    <span class="flex items-center gap-1.5 text-sm font-medium hover:text-brand-600"><span class="truncate">${esc(sp?.name || '?')}</span>${r.source === 'panel' ? sourceBadge(r.source, r.created_by) : ''}</span>
                     <span class="block truncate text-xs text-slate-500">${esc(sp?.company || '')}</span>
                   </button>
                   ${statusSelect('request', r.id, r.status)}
                 </li>`;
               })
               .join('')}</ul>`
-          : `<p class="text-sm text-slate-500">No meeting requests.</p>`,
+          : `<p class="text-sm text-slate-500">No meeting requests.</p>`) + addSpeakerForm,
       ) +
       section(
         'Investor',
@@ -1118,15 +1261,10 @@ function openInvestor(id) {
           <div class="sm:col-span-2">${field('Notes', textarea('notes', s.notes))}</div>
         </div>`,
       ) +
-      section(
-        'Technical',
-        `<dl class="rounded-lg bg-slate-50 px-4 py-2 text-xs">
-          ${infoRow('Booking ID', `<span class="font-mono">${esc(s.booking_id || '—')}</span>`)}
-          ${infoRow('Picked (order)', esc((s.speaker_slugs || []).join(', ') || '—'))}
-          ${infoRow('Page', esc(meta.page || '—'))}
-        </dl>`,
-      ),
-    footerLeft: `<button type="button" data-action="delete-investor" data-id="${s.id}" class="${BTN_DANGER}">Delete</button>`,
+      section(`History${sends > 1 ? ` · sent the form ${sends}×` : ''}`, historyList(s, d)),
+    footerLeft: s.archived_at
+      ? `<button type="button" data-action="restore-investor" data-id="${s.id}" class="${BTN_SECONDARY}">Restore</button>`
+      : `<button type="button" data-action="archive-investor" data-id="${s.id}" class="${BTN_DANGER}">Archive</button>`,
     onSubmit: async (fd) => {
       await state.store.updateSubmission(s.id, {
         first_name: nullIfEmpty(fd.get('first_name')),
@@ -1142,6 +1280,120 @@ function openInvestor(id) {
       reload();
     },
   });
+  updateAddWarning();
+}
+
+// warn when the picked speaker can't take another booking (the team may still add it, e.g. as waitlisted)
+function updateAddWarning() {
+  const box = document.querySelector('[data-add-requests]');
+  if (!box) return;
+  const a = derived().availabilityById.get(box.querySelector('[data-add-speaker]').value);
+  const warn = box.querySelector('[data-add-warning]');
+  const blocked = a && a.status !== 'available';
+  warn.classList.toggle('hidden', !blocked);
+  if (blocked) {
+    warn.textContent = `This speaker is ${(CAPACITY_STATUSES[a.status] || CAPACITY_STATUSES.closed).label.toLowerCase()} (${a.used}/${a.used + a.remaining} taken). Consider “Waitlisted”.`;
+  }
+}
+
+function openNewInvestor() {
+  const d = derived();
+  openDrawer({
+    title: 'New investor',
+    subtitle: 'For investors who got in touch outside the website form.',
+    submitLabel: 'Create investor',
+    body:
+      section(
+        'Investor',
+        `<div class="grid gap-4 sm:grid-cols-2">
+          ${field('First name', input('first_name', ''))}
+          ${field('Last name', input('last_name', ''))}
+          ${field('Email', input('email', '', 'type="email" required'), 'One card per email. If it exists, add speakers on that card instead.')}
+          ${field('Company', input('company', ''))}
+          <div class="sm:col-span-2">${field('LinkedIn', input('linkedin', ''))}</div>
+          <div class="sm:col-span-2">${field('Notes', textarea('notes', '', 3))}</div>
+        </div>`,
+      ) +
+      section(
+        'Speakers (optional)',
+        `<div class="mb-3 max-w-64">${field('Status for these requests', select('status', REQUEST_STATUSES.filter((x) => !CLOSED.has(x.value)), 'new_request'))}</div>
+        <ul class="max-h-72 divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200">${d.live.speakers
+          .map(
+            (sp) => `<li><label class="flex cursor-pointer items-center gap-3 px-3 py-2 hover:bg-slate-50">
+              <input type="checkbox" name="speaker_ids" value="${sp.id}" class="size-4 rounded border-slate-300 accent-brand-600">
+              <span class="min-w-0 flex-1 truncate text-sm">${esc(sp.name)} <span class="text-slate-500">· ${esc(sp.company)}</span></span>
+              <span class="text-xs text-slate-500">${esc(availabilityNote(sp, d))}</span>
+            </label></li>`,
+          )
+          .join('')}</ul>`,
+      ),
+    onSubmit: async (fd) => {
+      const id = await state.store.createInvestor({
+        email: String(fd.get('email')).trim().toLowerCase(),
+        first_name: nullIfEmpty(fd.get('first_name')),
+        last_name: nullIfEmpty(fd.get('last_name')),
+        company: nullIfEmpty(fd.get('company')),
+        linkedin: nullIfEmpty(fd.get('linkedin')),
+        notes: nullIfEmpty(fd.get('notes')),
+        speaker_ids: fd.getAll('speaker_ids'),
+        status: fd.get('status'),
+      });
+      toast('Investor created.');
+      await reload();
+      setTimeout(() => openInvestor(id), 0);
+    },
+  });
+}
+
+function openNewRequest() {
+  const d = derived();
+  const investors = [...d.live.submissions].sort((a, b) => fullName(a).localeCompare(fullName(b)));
+  openDrawer({
+    title: 'New meeting request',
+    subtitle: 'Link an existing investor to a speaker.',
+    submitLabel: 'Create request',
+    body: investors.length
+      ? `<div class="grid gap-4">
+          ${field(
+            'Investor',
+            `<select name="submission_id" required class="${SELECT}">${investors
+              .map((x) => `<option value="${x.id}">${esc(fullName(x))}${x.company ? ` · ${esc(x.company)}` : ''} — ${esc(x.email)}</option>`)
+              .join('')}</select>`,
+            'Not in the list? <button type="button" data-action="new-investor" class="font-medium text-brand-600 hover:text-brand-700">Create a new investor</button> first.',
+          )}
+          ${field(
+            'Speaker',
+            `<select name="speaker_id" required class="${SELECT}">${d.live.speakers
+              .map((sp) => `<option value="${sp.id}">${esc(sp.name)} · ${esc(sp.company)} — ${esc(availabilityNote(sp, d))}</option>`)
+              .join('')}</select>`,
+          )}
+          ${field('Status', select('status', REQUEST_STATUSES.filter((x) => !CLOSED.has(x.value)), 'new_request'))}
+          ${field('Note', input('note', '', 'placeholder="e.g. asked by email on 21 Oct"'))}
+        </div>`
+      : `<p class="text-sm text-slate-500">No investors yet. <button type="button" data-action="new-investor" class="font-medium text-brand-600">Create one</button>.</p>`,
+    onSubmit: investors.length
+      ? async (fd) => {
+          const submissionId = fd.get('submission_id');
+          const speakerId = fd.get('speaker_id');
+          if (state.data.requests.some((r) => r.submission_id === submissionId && r.speaker_id === speakerId)) {
+            throw new Error('This investor already has a request for this speaker.');
+          }
+          const added = await state.store.addRequests(submissionId, [speakerId], fd.get('status'), nullIfEmpty(fd.get('note')));
+          if (!added) throw new Error('Nothing was added (the speaker may be archived).');
+          toast('Meeting request created.');
+          reload();
+        }
+      : null,
+  });
+}
+
+function downloadBackup() {
+  const blob = new Blob([JSON.stringify({ exported_at: new Date().toISOString(), ...state.data }, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `eic-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
 function openSpeaker(id) {
@@ -1156,6 +1408,7 @@ function openSpeaker(id) {
     subtitle: s ? esc(s.company) : 'The slug must match the speaker’s Webflow CMS slug.',
     submitLabel: s ? 'Save changes' : 'Add speaker',
     body:
+      (s ? archivedBanner(s, 'speaker') : '') +
       (s
         ? section(
             'Capacity',
@@ -1201,7 +1454,11 @@ function openSpeaker(id) {
               : `<p class="text-sm text-slate-500">No requests yet.</p>`,
           )
         : ''),
-    footerLeft: s && !reqs.length ? `<button type="button" data-action="delete-speaker" data-id="${s.id}" class="${BTN_DANGER}">Delete</button>` : '',
+    footerLeft: !s
+      ? ''
+      : s.archived_at
+        ? `<button type="button" data-action="restore-speaker" data-id="${s.id}" class="${BTN_SECONDARY}">Restore</button>`
+        : `<button type="button" data-action="archive-speaker" data-id="${s.id}" class="${BTN_DANGER}">Archive</button>`,
     onSubmit: async (fd) => {
       const capacity = Number(fd.get('capacity'));
       if (!Number.isInteger(capacity) || capacity < 0) throw new Error('Capacity must be a whole number, 0 or more.');
@@ -1378,10 +1635,11 @@ function exportView(view) {
   if (view === 'requests') {
     download(
       'meeting-requests',
-      ['Request #', 'Status', 'First name', 'Last name', 'Email', 'Company', 'LinkedIn', 'Speaker', 'Speaker company', 'Preference', 'Submitted', 'Hold until', 'Starts', 'Ends', 'Closure reason', 'Assignee', 'Notes'],
+      ['Request #', 'Status', 'Source', 'First name', 'Last name', 'Email', 'Company', 'LinkedIn', 'Speaker', 'Speaker company', 'Preference', 'Submitted', 'Hold until', 'Starts', 'Ends', 'Closure reason', 'Assignee', 'Notes'],
       requestRows().map(({ r, sub, sp }) => [
         r.request_number,
         REQUEST_STATUS[r.status]?.label,
+        SOURCES[r.source]?.label,
         sub?.first_name,
         sub?.last_name,
         sub?.email,
@@ -1402,7 +1660,7 @@ function exportView(view) {
   } else if (view === 'investors') {
     download(
       'investors',
-      ['First name', 'Last name', 'Email', 'Company', 'LinkedIn', 'Status', 'Speakers (status)', 'Submitted', 'Assignee', 'Notes', 'Booking ID'],
+      ['First name', 'Last name', 'Email', 'Company', 'LinkedIn', 'Status', 'Source', 'Website submissions', 'Speakers (status)', 'Created', 'Assignee', 'Notes', 'Archived', 'Booking ID'],
       investorRows().map(({ s, reqs }) => [
         s.first_name,
         s.last_name,
@@ -1410,10 +1668,13 @@ function exportView(view) {
         s.company,
         s.linkedin,
         SUBMISSION_STATUS[s.status]?.label,
+        SOURCES[s.source]?.label,
+        d.websiteSends(s.id),
         reqs.map((r) => `${d.speakerById.get(r.speaker_id)?.name} (${REQUEST_STATUS[r.status]?.label})`).join('; '),
         fmtDate(s.created_at),
         s.assignee,
         s.notes,
+        s.archived_at ? fmtDate(s.archived_at) : '',
         s.booking_id,
       ]),
     );
@@ -1461,11 +1722,10 @@ function refreshView() {
   if (state.view === 'overview' || !document.getElementById('view-body')) return renderView();
   const chipsEl = document.getElementById('chips');
   if (chipsEl) {
-    const d = derived();
     const chipLists = {
-      requests: () => chips('requests', REQUEST_CHIPS.map((c) => ({ ...c, count: state.data.requests.filter(c.test).length }))),
-      investors: () => chips('investors', INVESTOR_CHIPS.map((c) => ({ ...c, count: state.data.submissions.filter(c.test).length }))),
-      speakers: () => chips('speakers', SPEAKER_CHIPS.map((c) => ({ ...c, count: state.data.speakers.filter((s) => c.test(s, d)).length }))),
+      requests: () => chips('requests', requestChipItems()),
+      investors: () => chips('investors', investorChipItems()),
+      speakers: () => chips('speakers', speakerChipItems()),
     };
     chipsEl.innerHTML = chipLists[state.view]();
   }
@@ -1497,6 +1757,11 @@ function bindEvents() {
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') toggleMobileMenu(false);
+    // Enter in the "add a speaker" note adds the speaker instead of saving the whole investor form
+    if (e.key === 'Enter' && e.target.matches?.('[data-add-note]')) {
+      e.preventDefault();
+      e.target.closest('[data-add-requests]')?.querySelector('[data-action="add-requests"]')?.click();
+    }
   });
 
   document.addEventListener('click', async (e) => {
@@ -1541,31 +1806,59 @@ function bindEvents() {
     const syncSource = t.closest('[data-sync-source]');
     if (syncSource) return openSync(syncSource.dataset.syncSource);
 
-    const delInvestor = t.closest('[data-action="delete-investor"]');
-    if (delInvestor) {
-      const s = state.data.submissions.find((x) => x.id === delInvestor.dataset.id);
-      const n = state.data.requests.filter((r) => r.submission_id === s?.id).length;
-      if (!s || !confirm(`Delete ${fullName(s)} and their ${n} meeting request${n === 1 ? '' : 's'}? This frees their places and can’t be undone.`)) return;
+    if (t.closest('[data-action="new-request"]')) return openNewRequest();
+    if (t.closest('[data-action="new-investor"]')) return openNewInvestor();
+    if (t.closest('[data-action="download-backup"]')) return downloadBackup();
+
+    const addBtn = t.closest('[data-action="add-requests"]');
+    if (addBtn) {
+      const box = addBtn.closest('[data-add-requests]');
+      const submissionId = box.dataset.addRequests;
+      addBtn.disabled = true;
       try {
-        await state.store.deleteSubmission(s.id);
-        closeDrawer();
-        toast(`${fullName(s)} deleted.`);
-        reload();
+        const added = await state.store.addRequests(
+          submissionId,
+          [box.querySelector('[data-add-speaker]').value],
+          box.querySelector('[data-add-status]').value,
+          nullIfEmpty(box.querySelector('[data-add-note]').value),
+        );
+        toast(added ? 'Speaker added.' : 'Nothing added — they already have this speaker.');
+        await reload();
+        openInvestor(submissionId);
       } catch (err) {
         toast(errorText(err), 'error');
+        addBtn.disabled = false;
       }
       return;
     }
 
-    const delSpeaker = t.closest('[data-action="delete-speaker"]');
-    if (delSpeaker) {
-      const s = state.data.speakers.find((x) => x.id === delSpeaker.dataset.id);
-      if (!s || !confirm(`Delete speaker ${s.name}? The website card stays in Webflow but won’t have availability anymore.`)) return;
+    const archiveAction = t.closest('[data-action$="-investor"], [data-action$="-speaker"]');
+    if (archiveAction && /^(archive|restore)-(investor|speaker)$/.test(archiveAction.dataset.action)) {
+      const [verb, kind] = archiveAction.dataset.action.split('-');
+      const id = archiveAction.dataset.id;
+      const row = kind === 'investor' ? state.data.submissions.find((x) => x.id === id) : state.data.speakers.find((x) => x.id === id);
+      if (!row) return;
+      const name = kind === 'investor' ? fullName(row) : row.name;
+      if (verb === 'archive') {
+        const msg =
+          kind === 'investor'
+            ? `Archive ${name}? Their requests stop taking places. You can restore them later from the Archived filter.`
+            : `Archive ${name}? They can’t be booked on the website anymore; requests and history stay. You can restore them later.`;
+        if (!confirm(msg)) return;
+      }
       try {
-        await state.store.deleteSpeaker(s.id);
+        await (kind === 'investor' ? state.store.archiveSubmission(id, verb === 'archive') : state.store.archiveSpeaker(id, verb === 'archive'));
         closeDrawer();
-        toast(`${s.name} deleted.`);
-        reload();
+        await reload();
+        if (verb === 'restore' && kind === 'investor') {
+          const over = (derived().requestsBySubmission.get(id) || [])
+            .map((r) => derived().availabilityById.get(r.speaker_id))
+            .filter((a) => a?.status === 'over_capacity');
+          if (over.length) toast(`${name} restored — ${over.length} speaker${over.length === 1 ? ' is' : 's are'} now over capacity. Check their requests.`, 'error');
+          else toast(`${name} restored.`);
+        } else {
+          toast(`${name} ${verb === 'archive' ? 'archived' : 'restored'}.`);
+        }
       } catch (err) {
         toast(errorText(err), 'error');
       }
@@ -1590,6 +1883,11 @@ function bindEvents() {
         state.filters.requests.speaker = el.value;
         renderRequestsBody();
       }
+      if (el.matches('[data-filter-source]')) {
+        state.filters[el.dataset.filterSource].source = el.value;
+        BODIES[el.dataset.filterSource]();
+      }
+      if (el.matches('[data-add-speaker]')) updateAddWarning();
       return;
     }
     const writes = {
@@ -1665,7 +1963,7 @@ function leave() {
   if (unsubscribe) unsubscribe();
   unsubscribe = null;
   state.loaded = false;
-  state.data = { speakers: [], availability: [], submissions: [], requests: [], admins: [] };
+  state.data = { speakers: [], availability: [], submissions: [], requests: [], events: [], admins: [] };
   closeDrawer();
 }
 

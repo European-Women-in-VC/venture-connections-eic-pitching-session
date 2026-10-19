@@ -8,6 +8,7 @@ const key = (v) => norm(v).toLowerCase();
 //   { type: 'add',     site }                         card on the website, not in the database
 //   { type: 'update',  speaker, site, fields }         same slug, name/company differ
 //   { type: 'slug',    speaker, site, fields }         same person (name), slug changed on the website
+//   { type: 'restore', speaker, site, fields }         archived in the panel, but the card is on the website
 //   { type: 'missing', speaker, requests }             in the database, no card on the website
 // `fields` holds only what changes: { slug?, name?, company? }.
 export function diffSpeakers(dbSpeakers, siteSpeakers, requestCounts = new Map()) {
@@ -28,12 +29,13 @@ export function diffSpeakers(dbSpeakers, siteSpeakers, requestCounts = new Map()
     const speaker = bySlug.get(site.slug);
     if (!speaker) continue;
     const fields = changedFields(speaker, site);
-    if (Object.keys(fields).length) suggestions.push({ type: 'update', speaker, site, fields });
+    if (speaker.archived_at) suggestions.push({ type: 'restore', speaker, site, fields });
+    else if (Object.keys(fields).length) suggestions.push({ type: 'update', speaker, site, fields });
     else inSync++;
   }
 
   // website-only cards: a renamed slug (same person) or a new speaker
-  let dbOnly = dbSpeakers.filter((s) => !siteSlugs.has(s.slug));
+  let dbOnly = dbSpeakers.filter((s) => !siteSlugs.has(s.slug) && !s.archived_at);
   for (const site of siteSpeakers.filter((s) => !bySlug.has(s.slug))) {
     const renamed = dbOnly.find((s) => key(s.name) && key(s.name) === key(site.name));
     if (renamed) {
@@ -46,7 +48,7 @@ export function diffSpeakers(dbSpeakers, siteSpeakers, requestCounts = new Map()
 
   // database-only speakers that can still be booked
   for (const speaker of dbOnly) {
-    if (speaker.availability === 'closed' || speaker.availability === 'unavailable') continue;
+    if (speaker.archived_at || speaker.availability === 'closed' || speaker.availability === 'unavailable') continue;
     suggestions.push({ type: 'missing', speaker, requests: requestCounts.get(speaker.id) || 0 });
   }
 
@@ -69,6 +71,8 @@ export function changeFor(suggestion, defaultCapacity = 4) {
     case 'update':
     case 'slug':
       return { id: suggestion.speaker.id, update: suggestion.fields };
+    case 'restore':
+      return { id: suggestion.speaker.id, update: { ...suggestion.fields, archived_at: null } };
     case 'missing':
       return { id: suggestion.speaker.id, update: { availability: 'closed' } };
     default:

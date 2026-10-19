@@ -47,7 +47,7 @@ test('books and passes the form to book_meetings', async () => {
   const res = await POST(post(valid));
 
   assert.equal(res.status, 200);
-  assert.deepEqual(await res.json(), { ok: true, duplicate: false, unknown: [] });
+  assert.deepEqual(await res.json(), { ok: true, duplicate: false, repeat: false, already: [], unknown: [] });
   assert.equal(res.headers.get('access-control-allow-origin'), ORIGIN);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, 'https://proj.supabase.co/rest/v1/rpc/book_meetings');
@@ -72,6 +72,13 @@ test('409 with the speakers that are no longer available', async () => {
   const res = await POST(post(valid));
   assert.equal(res.status, 409);
   assert.deepEqual(await res.json(), { ok: false, error: 'unavailable', unavailable: ['proskope'] });
+});
+
+test('repeat submission from the same email passes repeat + already through', async () => {
+  mockRpc({ ok: true, submission_id: 'x', repeat: true, already: ['proskope'], unknown: [] });
+  const res = await POST(post(valid));
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ok: true, duplicate: false, repeat: true, already: ['proskope'], unknown: [] });
 });
 
 test('duplicate booking id is still a success', async () => {
