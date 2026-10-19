@@ -150,6 +150,23 @@ export function createDemoStore() {
       db.requests = db.requests.filter((r) => r.submission_id !== id);
       changed();
     },
+    // fake website: one company renamed, one slug changed, one new card, one speaker removed
+    async fetchWebsiteSpeakers(source = 'live') {
+      await new Promise((r) => setTimeout(r, 300));
+      const speakers = db.speakers
+        .filter((s) => s.slug !== 'driftlogix')
+        .map((s) => ({ slug: s.slug, name: s.name, company: s.company }))
+        .map((s) => (s.slug === 'agrisense' ? { ...s, company: 'AgriSense Labs' } : s))
+        .map((s) => (s.slug === 'cyberveil' ? { ...s, slug: 'cyberveil-security' } : s));
+      speakers.push({ slug: 'exognis', name: 'Ensieh Iranmehr', company: 'Exognis' });
+      return {
+        source,
+        url: 'https://www.ventureconnections.co/eic-women-leadership-programme',
+        fetchedAt: new Date().toISOString(),
+        speakers,
+        warnings: source === 'staging' ? ['Demo warning: two cards use the slug “orbitra” with different names.'] : [],
+      };
+    },
     subscribe(onChange, onLive) {
       listener = onChange;
       setTimeout(() => onLive(true), 300);

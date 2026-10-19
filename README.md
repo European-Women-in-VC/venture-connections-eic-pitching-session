@@ -28,6 +28,7 @@ own handler as a raw backup copy (Webflow Forms + notification email) with a `Bo
 | Path | What |
 |---|---|
 | `api/availability.js` | `GET` → `{ availability: { <slug>: { recordId, capacity, used, available, status } } }`. `?fresh=…` bypasses the CDN cache. |
+| `api/website-speakers.js` | `GET ?source=live\|staging` → speaker cards on the Webflow page (for the panel's website comparison). |
 | `api/book.js` | `POST { bookingId, email, firstName, lastName, company, linkedin, speakers[] }` → 200 booked · 409 `unavailable[]` · 422 invalid · 403 wrong origin. |
 | `lib/` | Supabase REST client (secret key, server only) and CORS helper. |
 | `supabase/migrations/` | Database schema: `speakers`, `submissions`, `meeting_requests`, view `speaker_availability`, function `book_meetings`. |
@@ -66,6 +67,12 @@ Team panel for the bookings: overview, meeting requests (status inline), investo
   source `admin/admin.css` → built to `public/eic-team-4k9p/admin.css` by `npm run build` (Vercel runs it).
 - Local demo with fake data: `npm run build && python3 -m http.server 4322 --directory public`,
   then open http://localhost:4322/eic-team-4k9p/?demo
+
+**Compare with website** (Speakers page): reads the speaker cards on the published Webflow page
+(`GET /api/website-speakers?source=live|staging`, from the card embed's `data-speaker*` attributes) and
+suggests: add new cards, update changed names/companies, follow slug changes (same name → bookings kept),
+and close speakers whose card is gone (unticked by default). Logic: `public/eic-team-4k9p/js/sync.js`.
+Page URLs can be overridden with `WEBSITE_URL_LIVE` / `WEBSITE_URL_STAGING`.
 
 Add a team member: Supabase → Authentication → Users → *Invite user*, and add the same email
 (lowercase) to the `admins` table. Supabase → Authentication → URL Configuration must have

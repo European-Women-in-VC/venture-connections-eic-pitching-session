@@ -33,6 +33,14 @@ export function createSupabaseStore(client) {
     deleteSpeaker: (id) => client.from('speakers').delete().eq('id', id).then(must),
     deleteSubmission: (id) => client.from('submissions').delete().eq('id', id).then(must),
 
+    // speaker cards on the published Webflow page (source of truth for slug / name / company)
+    async fetchWebsiteSpeakers(source = 'live') {
+      const res = await fetch(`/api/website-speakers?source=${encodeURIComponent(source)}`, { headers: { Accept: 'application/json' } });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `Website check failed (${res.status})`);
+      return body;
+    },
+
     // calls onChange on any insert/update/delete; onLive(true|false) for the "Live" indicator
     subscribe(onChange, onLive) {
       const channel = client.channel('admin-panel');

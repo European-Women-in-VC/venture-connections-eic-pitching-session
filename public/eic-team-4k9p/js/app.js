@@ -6,6 +6,7 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/+esm';
 import { createSupabaseStore } from './store.js';
 import { createDemoStore } from './demo.js';
+import { changeFor, diffSpeakers } from './sync.js';
 import {
   CAPACITY_STATUSES,
   CLOSED,
@@ -131,6 +132,7 @@ const ICONS = {
   plus: '<path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />',
   logout: '<path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15m3 0 3-3m0 0-3-3m3 3H9" />',
   arrow: '<path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />',
+  sync: '<path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />',
 };
 const icon = (name, cls = 'size-5') =>
   `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.6" stroke="currentColor" class="${cls}" aria-hidden="true">${ICONS[name]}</svg>`;
@@ -788,6 +790,7 @@ function renderSpeakers() {
       'Speakers',
       'Capacity and availability. Changes show on the website within ~10 seconds.',
       `<button data-export="speakers" class="${BTN_SECONDARY}">${icon('download', 'size-4')} Export CSV</button>
+       <button data-sync-source="live" class="${BTN_SECONDARY}">${icon('sync', 'size-4')} Compare with website</button>
        <button data-action="new-speaker" class="${BTN_PRIMARY}">${icon('plus', 'size-4')} Add speaker</button>`,
     ) +
     `<div class="space-y-4 p-6">
@@ -1067,7 +1070,7 @@ function openSpeaker(id) {
           <div class="sm:col-span-2">${field(
             'Slug',
             input('slug', s?.slug, `required pattern="[a-z0-9]+(-[a-z0-9]+)*" ${s ? 'disabled' : ''}`, 'font-mono'),
-            s ? 'Fixed: it links the website card to this speaker.' : 'Lowercase, numbers and dashes, exactly as in Webflow (e.g. <span class="font-mono">geniel-srl</span>).',
+            s ? 'Links the website card to this speaker. If it changed in Webflow, use “Compare with website”.' : 'Lowercase, numbers and dashes, exactly as in Webflow (e.g. <span class="font-mono">geniel-srl</span>).',
           )}</div>
           ${field('Capacity', input('capacity', s?.capacity ?? 4, 'type="number" min="0" max="99" required'))}
           ${field('Availability', select('availability', SPEAKER_STATES, s?.availability || 'open'), 'Not “Open” = can’t be booked on the website.')}
@@ -1116,6 +1119,135 @@ function openSpeaker(id) {
       reload();
     },
   });
+}
+
+// ---------------------------------------------------------------------------
+// Compare with website (Webflow page = source of truth for slug / name / company)
+// ---------------------------------------------------------------------------
+const SYNC_GROUPS = [
+  { type: 'add', title: 'New on the website', hint: 'Cards that aren’t in the database yet. They’ll be added with capacity 4 and “Open”.', tone: 'green' },
+  { type: 'update', title: 'Name or company changed', hint: 'The website shows different text for these speakers.', tone: 'blue' },
+  { type: 'slug', title: 'Slug changed on the website', hint: 'Same person, new slug. Updating keeps all their bookings and makes the website badge work again.', tone: 'amber' },
+  { type: 'missing', title: 'Not on the website', hint: 'No card found. Maybe removed, maybe hidden on purpose — so not ticked by default. Applying marks them “Closed” (no new bookings; existing requests stay).', tone: 'gray' },
+];
+
+let syncRun = 0;
+
+const change = (label, from, to) =>
+  `<div class="mt-1 flex flex-wrap items-baseline gap-x-2 text-xs"><span class="w-16 shrink-0 text-slate-500">${esc(label)}</span><span class="text-slate-400 line-through">${esc(from || '—')}</span><span class="text-slate-400">→</span><span class="font-medium text-slate-900">${esc(to)}</span></div>`;
+
+function suggestionBody(sg) {
+  if (sg.type === 'add') {
+    return `<div class="text-sm font-medium">${esc(sg.site.name || '—')} <span class="font-normal text-slate-500">· ${esc(sg.site.company || '—')}</span></div>
+      <div class="mt-0.5 font-mono text-xs text-slate-500">${esc(sg.site.slug)}</div>`;
+  }
+  if (sg.type === 'missing') {
+    return `<div class="text-sm font-medium">${esc(sg.speaker.name)} <span class="font-normal text-slate-500">· ${esc(sg.speaker.company)}</span></div>
+      <div class="mt-0.5 text-xs text-slate-500"><span class="font-mono">${esc(sg.speaker.slug)}</span>${sg.requests ? ` · ${sg.requests} request${sg.requests === 1 ? '' : 's'} (kept)` : ''}</div>`;
+  }
+  const f = sg.fields;
+  return `<div class="text-sm font-medium">${esc(sg.speaker.name)} <span class="font-normal text-slate-500">· ${esc(sg.speaker.company)}</span></div>
+    ${f.slug ? change('Slug', sg.speaker.slug, f.slug) : ''}
+    ${f.name ? change('Name', sg.speaker.name, f.name) : ''}
+    ${f.company ? change('Company', sg.speaker.company, f.company) : ''}`;
+}
+
+async function openSync(source = 'live') {
+  const run = ++syncRun;
+  const sourceTabs = `<div class="inline-flex rounded-lg bg-slate-100 p-1 text-sm">
+    ${[
+      ['live', 'Live site'],
+      ['staging', 'Staging (webflow.io)'],
+    ]
+      .map(([id, label]) => `<button type="button" data-sync-source="${id}" class="rounded-md px-3 py-1.5 font-medium ${id === source ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-500 hover:text-slate-900'}">${label}</button>`)
+      .join('')}
+  </div>`;
+  const shell = (content, onSubmit, submitLabel) =>
+    openDrawer({
+      title: 'Compare with website',
+      subtitle: 'The Webflow page is the source of truth for speaker names, companies and slugs.',
+      body: `<div class="flex flex-wrap items-center justify-between gap-3">${sourceTabs}
+        <button type="button" data-sync-source="${source}" class="text-sm text-brand-600 hover:text-brand-700">Check again</button></div>${content}`,
+      onSubmit,
+      submitLabel,
+    });
+
+  shell(`<p class="py-10 text-center text-sm text-slate-500">Reading the ${source === 'staging' ? 'staging' : 'live'} page…</p>`);
+
+  let site;
+  try {
+    site = await state.store.fetchWebsiteSpeakers(source);
+  } catch (err) {
+    if (run !== syncRun || !document.getElementById('drawer-form')) return;
+    shell(`<p class="rounded-lg bg-rose-50 px-4 py-3 text-sm text-rose-700">${esc(errorText(err))}</p>`);
+    return;
+  }
+  if (run !== syncRun || !document.getElementById('drawer-form')) return; // closed or replaced meanwhile
+
+  const counts = new Map();
+  state.data.requests.forEach((r) => counts.set(r.speaker_id, (counts.get(r.speaker_id) || 0) + 1));
+  const { suggestions, inSync } = diffSpeakers(state.data.speakers, site.speakers, counts);
+
+  const meta = `<p class="text-xs text-slate-500">
+      ${site.speakers.length} cards on <a href="${esc(safeUrl(site.url))}" target="_blank" rel="noopener noreferrer" class="text-brand-600 hover:text-brand-700">the page ↗</a>
+      · read ${esc(timeAgo(site.fetchedAt))} · ${inSync} in sync · ${suggestions.length} suggestion${suggestions.length === 1 ? '' : 's'}
+    </p>`;
+  const warnings = (site.warnings || []).length
+    ? `<ul class="space-y-1 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-800">${site.warnings.map((w) => `<li>${esc(w)}</li>`).join('')}</ul>`
+    : '';
+
+  if (!suggestions.length) {
+    shell(`${meta}${warnings}<div class="rounded-xl border border-emerald-200 bg-emerald-50 px-5 py-8 text-center">
+      <p class="font-medium text-emerald-800">Everything matches the website.</p>
+      <p class="mt-1 text-sm text-emerald-700">All ${inSync} speakers have the same slug, name and company.</p></div>`);
+    return;
+  }
+
+  const groups = SYNC_GROUPS.map((g) => {
+    const items = suggestions.map((sg, i) => ({ sg, i })).filter(({ sg }) => sg.type === g.type);
+    if (!items.length) return '';
+    return `<section>
+      <div class="mb-2 flex items-center gap-2">${dot(g.tone)}<h3 class="text-sm font-semibold">${esc(g.title)}</h3><span class="text-xs text-slate-400">${items.length}</span></div>
+      <p class="mb-2 text-xs text-slate-500">${esc(g.hint)}</p>
+      <ul class="divide-y divide-slate-100 rounded-lg border border-slate-200">
+        ${items
+          .map(
+            ({ sg, i }) => `<li><label class="flex cursor-pointer items-start gap-3 px-3 py-2.5 hover:bg-slate-50">
+              <input type="checkbox" name="apply" value="${i}" ${sg.type === 'missing' ? '' : 'checked'} class="mt-1 size-4 rounded border-slate-300 accent-brand-600">
+              <span class="min-w-0 flex-1">${suggestionBody(sg)}</span>
+            </label></li>`,
+          )
+          .join('')}
+      </ul>
+    </section>`;
+  }).join('');
+
+  shell(
+    `${meta}${warnings}${groups}`,
+    async (fd) => {
+      const picked = fd.getAll('apply').map((i) => suggestions[Number(i)]);
+      if (!picked.length) throw new Error('Nothing selected.');
+      let done = 0;
+      const failed = [];
+      for (const sg of picked) {
+        const ch = changeFor(sg);
+        try {
+          if (ch.create) await state.store.createSpeaker(ch.create);
+          else await state.store.updateSpeaker(ch.id, ch.update);
+          done++;
+        } catch (err) {
+          failed.push(`${sg.site?.slug || sg.speaker?.slug}: ${errorText(err)}`);
+        }
+      }
+      await reload();
+      if (failed.length) {
+        toast(`${done} applied, ${failed.length} failed — ${failed.join('; ')}`, 'error');
+      } else {
+        toast(`${done} change${done === 1 ? '' : 's'} applied.`);
+      }
+    },
+    'Apply selected',
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -1291,6 +1423,9 @@ function bindEvents() {
     if (exp) return exportView(exp.dataset.export);
 
     if (t.closest('[data-action="new-speaker"]')) return openSpeaker(null);
+
+    const syncSource = t.closest('[data-sync-source]');
+    if (syncSource) return openSync(syncSource.dataset.syncSource);
 
     const delInvestor = t.closest('[data-action="delete-investor"]');
     if (delInvestor) {
