@@ -1,7 +1,7 @@
-// EIC Bookings admin panel — /admin
+// EIC Bookings admin panel — /eic-team-4k9p
 // Login: Supabase Auth (email + password, invite only). Data: Supabase with the user's session;
 // only emails on public.admins can read or edit (row-level security).
-// Local demo with fake data: http://localhost:4321/public/admin/?demo
+// Local demo with fake data: http://localhost:4322/eic-team-4k9p/?demo
 
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/+esm';
 import { createSupabaseStore } from './store.js';
@@ -26,6 +26,8 @@ const SUPABASE_URL = 'https://pxlfskkmakgmfgcwrqay.supabase.co';
 // Publishable key: safe in the browser, it can't read anything without a logged-in admin.
 const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_DToIGOE5HyUELkgj4XLfIg_6nuRftcx';
 const DEMO = ['localhost', '127.0.0.1'].includes(location.hostname) && new URLSearchParams(location.search).has('demo');
+// this page's own address (works whatever the folder is called); used for password-reset links
+const PANEL_URL = location.origin + location.pathname.replace(/\/?$/, '/');
 
 const app = document.getElementById('app');
 const drawerRoot = document.getElementById('drawer-root');
@@ -257,7 +259,7 @@ function showLogin(notice = '') {
       form.email.focus();
       return;
     }
-    const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo: location.origin + '/admin/' });
+    const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo: PANEL_URL });
     if (error) showFormError('login-error', error.message);
     else showLogin('If this email has an account, a link to set a new password is on its way.');
   });

@@ -2,4 +2,4 @@
 .env*
 node_modules
 # built by `npm run build`
-public/admin/admin.css
+public/eic-team-4k9p/admin.css

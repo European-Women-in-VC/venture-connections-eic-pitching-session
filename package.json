@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tailwindcss -i admin/admin.css -o public/admin/admin.css --minify",
-    "dev:css": "tailwindcss -i admin/admin.css -o public/admin/admin.css --watch",
+    "build": "tailwindcss -i admin/admin.css -o public/eic-team-4k9p/admin.css --minify",
+    "dev:css": "tailwindcss -i admin/admin.css -o public/eic-team-4k9p/admin.css --watch",
     "test": "node --test"
   },
   "devDependencies": {

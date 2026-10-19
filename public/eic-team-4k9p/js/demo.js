@@ -1,4 +1,4 @@
-// In-memory store with fake data for trying the panel locally: http://localhost:4321/public/admin/?demo
+// In-memory store with fake data for trying the panel locally: http://localhost:4322/eic-team-4k9p/?demo
 // Same interface as createSupabaseStore; nothing is sent anywhere.
 
 import { computeAvailability } from './labels.js';
