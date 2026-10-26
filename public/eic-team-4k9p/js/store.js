@@ -2,6 +2,8 @@
 // user's session; row-level security (admins allowlist) decides what is allowed.
 
 const TABLES = ['speakers', 'submissions', 'meeting_requests', 'submission_events'];
+// panel views → tables
+export const TABLE = { requests: 'meeting_requests', investors: 'submissions', speakers: 'speakers' };
 
 const must = ({ data, error }) => {
   if (error) throw error;
@@ -37,6 +39,27 @@ export function createSupabaseStore(client) {
       client.from('submissions').update({ archived_at: archived ? new Date().toISOString() : null }).eq('id', id).select().single().then(must),
     archiveSpeaker: (id, archived) =>
       client.from('speakers').update({ archived_at: archived ? new Date().toISOString() : null }).eq('id', id).select().single().then(must),
+
+    // bulk edits: the same change for many rows (row-level security still applies)
+    async bulkUpdate(kind, ids, patch) {
+      const rows = await client.from(TABLE[kind]).update(patch).in('id', ids).select('id').then(must);
+      if (rows.length !== ids.length) throw new Error(`Only ${rows.length} of ${ids.length} rows could be changed.`);
+      return rows.length;
+    },
+    setTags: (kind, ids, add = [], remove = []) =>
+      client.rpc('panel_set_tags', { p_kind: kind, p_ids: ids, p_add: add, p_remove: remove }).then(must),
+    // undo: put back earlier values, e.g. [{ id, status: 'new_request' }, …] (grouped into few updates)
+    async restoreRows(kind, rows) {
+      const groups = new Map();
+      for (const { id, ...values } of rows) {
+        const key = JSON.stringify(values);
+        if (!groups.has(key)) groups.set(key, { values, ids: [] });
+        groups.get(key).ids.push(id);
+      }
+      for (const { values, ids } of groups.values()) {
+        await client.from(TABLE[kind]).update(values).in('id', ids).then(must);
+      }
+    },
 
     // team additions (database functions record source = panel, who did it, and a history entry)
     addRequests: (submissionId, speakerIds, status = 'new_request', note = null) =>

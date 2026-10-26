@@ -40,6 +40,21 @@ own handler as a raw backup copy (Webflow Forms + notification email) with a `Bo
 | `dev/` | Local demo page with fake availability (not deployed). |
 | `test/` | Endpoint tests with a mocked Supabase. |
 
+## Workflow: branch → preview + staging → production
+
+The site is live, so changes go through a branch first:
+
+1. Work on a branch (`feature/…`) and push it. Vercel builds a **preview deployment** for it.
+2. Database changes go to the **staging** Supabase project first (`EIC-staging`, ref `ordkpipvkpumdgpgmoxx`).
+   Migrations are additive, so production keeps working whichever side goes live first.
+3. Test on the preview URL: the panel there (and on localhost) uses **staging** and shows a yellow badge.
+4. When approved: apply the migration to **production** (`pxlfskkmakgmfgcwrqay`), then merge the pull request
+   into `main` → production deploy.
+
+The panel chooses the database by address: only the production domains
+(`venture-connections-eic-pitching-se.vercel.app`, `…-session-oboilos-projects.vercel.app`) use production.
+Vercel env vars: Production → production project, Preview → staging project.
+
 ## Environment variables (Vercel)
 
 | Name | Value |
@@ -81,6 +96,13 @@ existing ones are skipped. Team additions go through `panel_add_requests()` / `p
 `backup.snapshots` (kept 30 days, not exposed to the API). Restore a table from the latest snapshot, e.g.
 `select jsonb_array_elements(data->'submissions') from backup.snapshots order by taken_at desc limit 1`.
 The panel's Overview → *Download backup* gives an offsite JSON copy of everything.
+
+**Archived requests, tags, stages, bulk edits.** Single meeting requests can be archived too; requests of an
+archived investor count as archived with them (chip "Investor archived"). Investors and requests have free
+`tags`; `test` is special: not counted in totals or in speaker capacity on the website. Investor status is
+replaced by an automatic **stage** from their requests (Needs action / In progress / Confirmed / Waitlisted /
+Closed; `investorStage()` in `labels.js`). All tables have checkboxes and a bulk bar (status, assignee,
+availability, capacity, tags, archive/restore, export) with Undo. Migration `20261026090000_request_archive_tags.sql`.
 
 **Compare with website** (Speakers page): reads the speaker cards on the published Webflow page
 (`GET /api/website-speakers?source=live|staging`, from the card embed's `data-speaker*` attributes) and

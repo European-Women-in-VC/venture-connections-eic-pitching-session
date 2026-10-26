@@ -84,10 +84,38 @@ export const SOURCES = {
   panel: { label: 'Team', title: 'Added by the team in this panel' },
 };
 
-// Same rules as the public.speaker_availability view (used by the demo data):
-// requests of archived investors don't count, archived speakers are closed.
-export function computeAvailability(speaker, requests, archivedSubmissionIds = new Set()) {
-  const mine = requests.filter((r) => r.speaker_id === speaker.id && !archivedSubmissionIds.has(r.submission_id));
+export const TEST_TAG = 'test';
+export const hasTestTag = (row) => Array.isArray(row?.tags) && row.tags.includes(TEST_TAG);
+
+// Investor stage, worked out from their (non-archived) requests — replaces the manual investor status
+export const STAGES = [
+  { value: 'needs_action', label: 'Needs action', tone: 'amber', hint: 'A request is new or needs review' },
+  { value: 'in_progress', label: 'In progress', tone: 'blue', hint: 'On hold or accepted, being scheduled' },
+  { value: 'confirmed', label: 'Confirmed', tone: 'green', hint: 'At least one meeting is scheduled' },
+  { value: 'waitlisted', label: 'Waitlisted', tone: 'violet', hint: 'Only waitlisted requests left' },
+  { value: 'closed', label: 'Closed', tone: 'gray', hint: 'All requests declined, cancelled or expired' },
+];
+export const STAGE = byValue(STAGES);
+export function investorStage(requests) {
+  const st = new Set(requests.map((r) => r.status));
+  if (st.has('new_request') || st.has('needs_review')) return 'needs_action';
+  if (st.has('hold_awaiting_speaker') || st.has('accepted_scheduling')) return 'in_progress';
+  if (st.has('scheduled_confirmed')) return 'confirmed';
+  if (st.has('waitlisted')) return 'waitlisted';
+  return 'closed';
+}
+
+// Same rules as the public.speaker_availability view (used by the demo data): archived requests,
+// requests of archived investors and anything tagged 'test' don't count; archived speakers are closed.
+export function computeAvailability(speaker, requests, archivedSubmissionIds = new Set(), testSubmissionIds = new Set()) {
+  const mine = requests.filter(
+    (r) =>
+      r.speaker_id === speaker.id &&
+      !r.archived_at &&
+      !archivedSubmissionIds.has(r.submission_id) &&
+      !testSubmissionIds.has(r.submission_id) &&
+      !hasTestTag(r),
+  );
   const used = mine.filter((r) => TAKES_PLACE.has(r.status)).length;
   const confirmed = mine.filter((r) => CONFIRMED.has(r.status)).length;
   const waitlisted = mine.filter((r) => r.status === 'waitlisted').length;

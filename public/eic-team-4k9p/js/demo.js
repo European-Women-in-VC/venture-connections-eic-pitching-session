@@ -1,7 +1,7 @@
 // In-memory store with fake data for trying the panel locally: http://localhost:4322/eic-team-4k9p/?demo
 // Same interface as createSupabaseStore; nothing is sent anywhere.
 
-import { computeAvailability } from './labels.js';
+import { computeAvailability, hasTestTag } from './labels.js';
 
 const SPEAKERS = [
   ['orbitra', 'Anna Kowalczyk', 'Orbitra'],
@@ -39,6 +39,7 @@ const STATUS_CYCLE = [
 ];
 
 const DEMO_ADMIN = 'demo@localhost';
+const TABLES = { requests: 'requests', investors: 'submissions', speakers: 'speakers' };
 const uuid = () => crypto.randomUUID();
 const now = () => new Date().toISOString();
 const hoursAgo = (h) => new Date(Date.now() - h * 3600 * 1000).toISOString();
@@ -83,6 +84,7 @@ function seed() {
       assignee: null,
       notes: i === 2 ? 'Prefers mornings.' : null,
       meta: { page: 'https://www.ventureconnections.co/eic-women-leadership-programme' },
+      tags: i === 7 ? ['test'] : i === 1 ? ['vip'] : [],
       archived_at: null,
       archived_by: null,
       created_at: hoursAgo(i * 9 + 1),
@@ -108,6 +110,9 @@ function seed() {
         closure_reason: null,
         assignee: null,
         internal_notes: rank === 0 && i % 3 === 0 ? 'Intro call done, waiting for speaker slots.' : null,
+        tags: [],
+        archived_at: null,
+        archived_by: null,
         created_at: sub.created_at,
         updated_at: sub.created_at,
       });
@@ -206,6 +211,9 @@ export function createDemoStore() {
         closure_reason: null,
         assignee: null,
         internal_notes: note || null,
+        tags: [],
+        archived_at: null,
+        archived_by: null,
         created_at: now(),
         updated_at: now(),
       });
@@ -234,9 +242,10 @@ export function createDemoStore() {
     async load() {
       await new Promise((r) => setTimeout(r, 150));
       const archivedSubs = new Set(db.submissions.filter((s) => s.archived_at).map((s) => s.id));
+      const testSubs = new Set(db.submissions.filter(hasTestTag).map((s) => s.id));
       return clone({
         speakers: [...db.speakers].sort((a, b) => a.name.localeCompare(b.name)),
-        availability: db.speakers.map((s) => computeAvailability(s, db.requests, archivedSubs)),
+        availability: db.speakers.map((s) => computeAvailability(s, db.requests, archivedSubs, testSubs)),
         submissions: [...db.submissions].sort((a, b) => b.created_at.localeCompare(a.created_at)),
         requests: [...db.requests].sort((a, b) => b.created_at.localeCompare(a.created_at)),
         events: [...db.events].sort((a, b) => b.created_at.localeCompare(a.created_at)),
@@ -247,6 +256,28 @@ export function createDemoStore() {
     updateSubmission: (id, patch) => update('submissions', id, patch),
     updateSpeaker: (id, patch) => update('speakers', id, patch),
     archiveSubmission: (id, archived) => archive('submissions', id, archived),
+    async bulkUpdate(kind, ids, patch) {
+      const table = TABLES[kind];
+      for (const id of ids) {
+        const extra = 'archived_at' in patch ? { archived_by: patch.archived_at ? DEMO_ADMIN : null } : {};
+        Object.assign(find(table, id), patch, extra, { updated_at: now() });
+      }
+      changed();
+      return ids.length;
+    },
+    async setTags(kind, ids, add = [], remove = []) {
+      const norm = (t) => String(t).trim().toLowerCase();
+      for (const id of ids) {
+        const row = find(TABLES[kind], id);
+        row.tags = [...new Set([...(row.tags || []), ...add.map(norm)])].filter((t) => t && !remove.map(norm).includes(t)).sort();
+      }
+      changed();
+      return ids.length;
+    },
+    async restoreRows(kind, rows) {
+      for (const { id, ...values } of rows) Object.assign(find(TABLES[kind], id), values);
+      changed();
+    },
     archiveSpeaker: (id, archived) => archive('speakers', id, archived),
     async createSpeaker(row) {
       if (db.speakers.some((s) => s.slug === row.slug)) throw new Error('duplicate key value violates unique constraint "speakers_slug_key"');
@@ -275,6 +306,7 @@ export function createDemoStore() {
         assignee: null,
         notes: inv.notes || null,
         meta: {},
+        tags: [],
         archived_at: null,
         archived_by: null,
         created_at: now(),

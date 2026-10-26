@@ -18,20 +18,49 @@ import {
   SOURCES,
   SPEAKER_STATE,
   SPEAKER_STATES,
+  STAGE,
+  STAGES,
+  TEST_TAG,
+  hasTestTag,
+  investorStage,
   SUBMISSION_STATUS,
   SUBMISSION_STATUSES,
   TAKES_PLACE,
   TONES,
 } from './labels.js';
 
-const SUPABASE_URL = 'https://pxlfskkmakgmfgcwrqay.supabase.co';
-// Publishable key: safe in the browser, it can't read anything without a logged-in admin.
-const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_DToIGOE5HyUELkgj4XLfIg_6nuRftcx';
+// Which database: the production addresses use production, every other address (branch previews,
+// localhost) uses the staging project. Publishable keys are safe in the browser: without a logged-in
+// admin they can't read anything.
+const ENVIRONMENTS = {
+  production: {
+    url: 'https://pxlfskkmakgmfgcwrqay.supabase.co',
+    key: 'sb_publishable_DToIGOE5HyUELkgj4XLfIg_6nuRftcx',
+  },
+  staging: {
+    url: 'https://ordkpipvkpumdgpgmoxx.supabase.co',
+    key: 'sb_publishable_eslOrlWhbn4eHJc4nE-4-A_20R70VPp',
+  },
+};
+const PRODUCTION_HOSTS = ['venture-connections-eic-pitching-se.vercel.app', 'venture-connections-eic-pitching-session-oboilos-projects.vercel.app'];
+const ENV = PRODUCTION_HOSTS.includes(location.hostname) ? 'production' : 'staging';
+const { url: SUPABASE_URL, key: SUPABASE_PUBLISHABLE_KEY } = ENVIRONMENTS[ENV];
 const DEMO = ['localhost', '127.0.0.1'].includes(location.hostname) && new URLSearchParams(location.search).has('demo');
 // this page's own address (works whatever the folder is called); used for password-reset links
 const PANEL_URL = location.origin + location.pathname.replace(/\/?$/, '/');
 
 const app = document.getElementById('app');
+
+// never mix up staging and production: badge + tab title
+if (ENV !== 'production' || DEMO) {
+  const label = DEMO ? 'Demo data' : 'Staging · test database';
+  document.title = `[${DEMO ? 'Demo' : 'Staging'}] ${document.title}`;
+  const badge = document.createElement('div');
+  badge.className =
+    'pointer-events-none fixed top-2 left-1/2 z-50 -translate-x-1/2 rounded-full bg-amber-400 px-3 py-1 text-xs font-semibold tracking-wide text-amber-950 uppercase shadow-md';
+  badge.textContent = label;
+  document.body.append(badge);
+}
 const drawerRoot = document.getElementById('drawer-root');
 const toasts = document.getElementById('toasts');
 
@@ -54,10 +83,12 @@ const state = {
   data: { speakers: [], availability: [], submissions: [], requests: [], events: [], admins: [] },
   view: 'overview',
   filters: {
-    requests: { q: '', chip: 'active', speaker: '', source: '', sort: { key: 'created', dir: 'desc' } },
-    investors: { q: '', chip: 'all', source: '', sort: { key: 'created', dir: 'desc' } },
+    requests: { q: '', chip: 'active', speaker: '', source: '', tag: '', sort: { key: 'created', dir: 'desc' } },
+    investors: { q: '', chip: 'all', source: '', tag: '', sort: { key: 'created', dir: 'desc' } },
     speakers: { q: '', chip: 'all', sort: { key: 'name', dir: 'asc' } },
   },
+  // ticked rows per table (bulk editing)
+  selected: { requests: new Set(), investors: new Set(), speakers: new Set() },
 };
 
 // ---------------------------------------------------------------------------
@@ -142,20 +173,31 @@ const ICONS = {
 const icon = (name, cls = 'size-5') =>
   `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.6" stroke="currentColor" class="${cls}" aria-hidden="true">${ICONS[name]}</svg>`;
 
-function toast(message, tone = 'success') {
+function toast(message, tone = 'success', action = null) {
   const el = document.createElement('div');
   const tones = {
     success: 'border-emerald-200 bg-white text-slate-800 [&_i]:bg-emerald-500',
     error: 'border-rose-200 bg-rose-50 text-rose-800 [&_i]:bg-rose-500',
   };
   el.className = `pointer-events-auto flex items-start gap-2.5 rounded-lg border px-3.5 py-3 text-sm shadow-lg transition duration-300 ${tones[tone]}`;
-  el.innerHTML = `<i class="mt-1.5 size-2 shrink-0 rounded-full"></i><span></span>`;
+  el.innerHTML = `<i class="mt-1.5 size-2 shrink-0 rounded-full"></i><span class="flex-1"></span>`;
   el.querySelector('span').textContent = message;
-  toasts.append(el);
-  setTimeout(() => {
+  const hide = () => {
     el.classList.add('opacity-0', 'translate-y-1');
     setTimeout(() => el.remove(), 300);
-  }, tone === 'error' ? 6000 : 2800);
+  };
+  if (action) {
+    const btn = document.createElement('button');
+    btn.className = 'shrink-0 font-semibold text-brand-600 hover:text-brand-800';
+    btn.textContent = action.label;
+    btn.addEventListener('click', () => {
+      hide();
+      action.onClick();
+    });
+    el.append(btn);
+  }
+  toasts.append(el);
+  setTimeout(hide, action ? 10000 : tone === 'error' ? 6000 : 2800);
 }
 
 const errorText = (err) => {
@@ -176,12 +218,23 @@ const errorText = (err) => {
 function derived() {
   const { speakers, availability, submissions, requests, events = [] } = state.data;
   const archivedSubs = new Set(submissions.filter((s) => s.archived_at).map((s) => s.id));
+  const testSubs = new Set(submissions.filter(hasTestTag).map((s) => s.id));
+  // a request is archived itself, or together with its investor
+  const requestArchived = (r) => Boolean(r.archived_at) || archivedSubs.has(r.submission_id);
+  // test = the request or its investor is tagged 'test' (not counted in totals or on the website)
+  const isTest = (r) => hasTestTag(r) || testSubs.has(r.submission_id);
   // "live" = not archived: what the lists, totals and dropdowns show
   const live = {
     speakers: speakers.filter((s) => !s.archived_at),
     submissions: submissions.filter((s) => !s.archived_at),
-    requests: requests.filter((r) => !archivedSubs.has(r.submission_id)),
+    requests: requests.filter((r) => !requestArchived(r)),
   };
+  // for totals: also without test data
+  const real = {
+    submissions: live.submissions.filter((s) => !hasTestTag(s)),
+    requests: live.requests.filter((r) => !isTest(r)),
+  };
+  const allTags = [...new Set([...submissions, ...requests].flatMap((x) => x.tags || []))].sort();
   const eventsBySubmission = new Map();
   for (const e of events) {
     if (!eventsBySubmission.has(e.submission_id)) eventsBySubmission.set(e.submission_id, []);
@@ -200,8 +253,81 @@ function derived() {
     requestsBySpeaker.get(r.speaker_id).push(r);
   }
   for (const list of requestsBySubmission.values()) list.sort((a, b) => (a.preference_rank || 99) - (b.preference_rank || 99));
-  return { speakerById, submissionById, availabilityById, requestsBySubmission, requestsBySpeaker, live, eventsBySubmission, websiteSends };
+  const stageOf = (subId) => investorStage((requestsBySubmission.get(subId) || []).filter((r) => !r.archived_at));
+  // why a request needs a second look
+  const flagsOf = (r) => {
+    const flags = [];
+    const sub = submissionById.get(r.submission_id);
+    const sp = speakerById.get(r.speaker_id);
+    if (r.archived_at) flags.push({ label: 'Archived', tone: 'gray', title: `Archived ${fmtDate(r.archived_at)}${r.archived_by ? ' by ' + r.archived_by : ''}` });
+    if (sub?.archived_at) flags.push({ label: 'Investor archived', tone: 'gray', title: `${fullName(sub)} was archived — this request is archived with them` });
+    if (sp?.archived_at) flags.push({ label: 'Speaker archived', tone: 'red', title: `${sp.name} is archived and can’t be booked` });
+    else if (sp && sp.availability !== 'open') flags.push({ label: `Speaker ${SPEAKER_STATE[sp.availability]?.label.toLowerCase()}`, tone: 'amber', title: `${sp.name} isn’t open for bookings` });
+    if (isTest(r)) flags.push({ label: 'Test', tone: 'yellow', title: hasTestTag(r) ? 'Tagged test' : 'The investor is tagged test' });
+    return flags;
+  };
+  return {
+    speakerById, submissionById, availabilityById, requestsBySubmission, requestsBySpeaker, live, real,
+    eventsBySubmission, websiteSends, requestArchived, isTest, stageOf, flagsOf, allTags,
+  };
 }
+
+// ---------- tags ----------
+const tagChip = (tag, removable = false) =>
+  `<span class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] leading-4 font-medium ring-1 ring-inset ${
+    tag === TEST_TAG ? 'bg-yellow-50 text-yellow-800 ring-yellow-600/30' : 'bg-slate-100 text-slate-700 ring-slate-300/70'
+  }">#${esc(tag)}${removable ? `<button type="button" data-tag-remove="${esc(tag)}" class="-mr-0.5 text-slate-400 hover:text-rose-600" aria-label="Remove tag ${esc(tag)}">×</button>` : ''}</span>`;
+const tagChips = (tags) => (tags || []).map((t) => tagChip(t)).join('');
+const flagChips = (flags) => flags.map((f) => `<span title="${esc(f.title)}">${pill(f.label, f.tone)}</span>`).join('');
+
+// tag editor inside side panels: chips + input; the hidden field holds the JSON list
+function tagsEditor(name, tags, suggestions) {
+  return `<div data-tags-editor class="flex min-h-10 flex-wrap items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2 py-1.5 shadow-xs focus-within:border-brand-500 focus-within:ring-2 focus-within:ring-brand-500/20">
+      <input type="hidden" name="${name}" value="${esc(JSON.stringify(tags || []))}">
+      <span data-tag-list class="contents">${(tags || []).map((t) => tagChip(t, true)).join('')}</span>
+      <input data-tag-input list="tag-suggestions" placeholder="Add tag + Enter" class="min-w-28 flex-1 border-0 bg-transparent p-1 text-sm focus:outline-none">
+    </div>
+    <datalist id="tag-suggestions">${[...new Set([TEST_TAG, ...suggestions])].map((t) => `<option value="${esc(t)}">`).join('')}</datalist>
+    <span class="mt-1 block text-xs text-slate-500"><b>test</b>: kept out of totals and not counted on the website.</span>`;
+}
+function editorTags(editor) {
+  try {
+    return JSON.parse(editor.querySelector('input[type=hidden]').value) || [];
+  } catch {
+    return [];
+  }
+}
+function setEditorTags(editor, tags) {
+  const clean = [...new Set(tags.map((t) => t.trim().toLowerCase().replace(/^#/, '')).filter(Boolean))].sort();
+  editor.querySelector('input[type=hidden]').value = JSON.stringify(clean);
+  editor.querySelector('[data-tag-list]').innerHTML = clean.map((t) => tagChip(t, true)).join('');
+}
+function commitTagInput(input) {
+  const editor = input.closest('[data-tags-editor]');
+  const value = input.value.replace(/,/g, ' ').trim();
+  if (!editor || !value) return;
+  setEditorTags(editor, [...editorTags(editor), ...value.split(/\s+/)]);
+  input.value = '';
+}
+const tagFilter = (view) => {
+  const tags = derived().allTags;
+  if (!tags.length) return '';
+  return `<select data-filter-tag="${view}" class="${SELECT} w-full sm:w-40" aria-label="Tag">
+    <option value="">All tags</option>
+    ${tags.map((t) => `<option value="${esc(t)}" ${state.filters[view].tag === t ? 'selected' : ''}>#${esc(t)}</option>`).join('')}
+  </select>`;
+};
+
+// ---------- selection + bulk bar ----------
+const CHECK = 'size-4 cursor-pointer rounded border-slate-300 accent-brand-600';
+const selectAllCell = (view, ids) => {
+  const sel = state.selected[view];
+  const all = ids.length > 0 && ids.every((id) => sel.has(id));
+  const some = !all && ids.some((id) => sel.has(id));
+  return `<th class="w-10 px-4 py-2.5"><input type="checkbox" data-select-all="${view}" ${all ? 'checked' : ''} ${some ? 'data-indeterminate' : ''} class="${CHECK}" aria-label="Select all shown"></th>`;
+};
+const selectCell = (view, id) =>
+  `<td class="w-10 px-4 py-3" data-stop><input type="checkbox" data-select="${view}" value="${esc(id)}" ${state.selected[view].has(id) ? 'checked' : ''} class="${CHECK}" aria-label="Select row"></td>`;
 
 const sourceBadge = (source, by) =>
   source === 'panel'
@@ -456,8 +582,8 @@ function renderShell() {
 
   app.innerHTML =
     layout === 'top'
-      ? `<div class="flex h-full flex-col">${mobileBar}${desktop}<main id="main" class="min-w-0 flex-1 overflow-y-auto scrollbar-thin"></main></div>`
-      : `<div class="flex h-full">${desktop}<div class="flex min-w-0 flex-1 flex-col">${mobileBar}<main id="main" class="min-w-0 flex-1 overflow-y-auto scrollbar-thin"></main></div></div>`;
+      ? `<div class="flex h-full flex-col">${mobileBar}${desktop}<main id="main" class="min-w-0 flex-1 overflow-y-auto scrollbar-thin pb-24"></main></div><div id="bulk-root"></div>`
+      : `<div class="flex h-full">${desktop}<div class="flex min-w-0 flex-1 flex-col">${mobileBar}<main id="main" class="min-w-0 flex-1 overflow-y-auto scrollbar-thin pb-24"></main></div></div><div id="bulk-root"></div>`;
   renderNav();
   renderLive();
 }
@@ -596,8 +722,9 @@ const tableWrap = (head, body) => `
 function renderOverview() {
   const main = document.getElementById('main');
   const d = derived();
-  const { speakers, submissions, requests } = d.live;
-  const realSubs = submissions.filter((s) => s.status !== 'test');
+  const { speakers } = d.live;
+  const { submissions, requests } = d.real; // not archived, not tagged test
+  const realSubs = submissions;
   const today = realSubs.filter((s) => Date.now() - new Date(s.created_at) < 86400000).length;
   const active = requests.filter((r) => TAKES_PLACE.has(r.status)).length;
   const confirmed = requests.filter((r) => CONFIRMED.has(r.status)).length;
@@ -707,28 +834,39 @@ function renderOverview() {
 // ---------------------------------------------------------------------------
 // Meeting requests
 // ---------------------------------------------------------------------------
+// every chip except "Archived" shows only requests that aren't archived (themselves or via their investor)
 const REQUEST_CHIPS = [
-  { id: 'active', label: 'Active', test: (r) => TAKES_PLACE.has(r.status) },
-  { id: 'all', label: 'All', test: () => true },
-  ...REQUEST_STATUSES.filter((s) => !CLOSED.has(s.value)).map((s) => ({ id: s.value, label: s.label, tone: s.tone, test: (r) => r.status === s.value })),
-  { id: 'closed', label: 'Declined / cancelled / expired', tone: 'gray', test: (r) => CLOSED.has(r.status) },
+  { id: 'active', label: 'Active', test: (r, d) => !d.requestArchived(r) && TAKES_PLACE.has(r.status) },
+  { id: 'all', label: 'All', test: (r, d) => !d.requestArchived(r) },
+  ...REQUEST_STATUSES.filter((s) => !CLOSED.has(s.value)).map((s) => ({
+    id: s.value,
+    label: s.label,
+    tone: s.tone,
+    test: (r, d) => !d.requestArchived(r) && r.status === s.value,
+  })),
+  { id: 'closed', label: 'Declined / cancelled / expired', tone: 'gray', test: (r, d) => !d.requestArchived(r) && CLOSED.has(r.status) },
+  { id: 'test', label: 'Test', tone: 'yellow', test: (r, d) => !d.requestArchived(r) && d.isTest(r) },
+  { id: 'archived', label: 'Archived', tone: 'gray', test: (r, d) => d.requestArchived(r) },
 ];
 
 const requestChipItems = () => {
-  const reqs = derived().live.requests;
-  return REQUEST_CHIPS.map((c) => ({ ...c, count: reqs.filter(c.test).length }));
+  const d = derived();
+  return REQUEST_CHIPS.map((c) => ({ ...c, count: state.data.requests.filter((r) => c.test(r, d)).length }));
 };
 
 function requestRows() {
   const f = state.filters.requests;
   const d = derived();
   const chip = REQUEST_CHIPS.find((c) => c.id === f.chip) || REQUEST_CHIPS[0];
-  const rows = d.live.requests
+  const rows = state.data.requests
+    .filter((r) => chip.test(r, d))
     .map((r) => ({ r, sub: d.submissionById.get(r.submission_id), sp: d.speakerById.get(r.speaker_id) }))
-    .filter(({ r }) => chip.test(r))
     .filter(({ r }) => !f.speaker || r.speaker_id === f.speaker)
     .filter(({ r }) => !f.source || r.source === f.source)
-    .filter(({ r, sub, sp }) => matches(f.q, fullName(sub), sub?.email, sub?.company, sp?.name, sp?.company, r.internal_notes, r.request_number));
+    .filter(({ r, sub }) => !f.tag || (r.tags || []).includes(f.tag) || (sub?.tags || []).includes(f.tag))
+    .filter(({ r, sub, sp }) =>
+      matches(f.q, fullName(sub), sub?.email, sub?.company, sp?.name, sp?.company, r.internal_notes, r.request_number, ...(r.tags || [])),
+    );
   return sortRows(
     rows,
     {
@@ -763,6 +901,7 @@ function renderRequests() {
           ${speakers.map((s) => `<option value="${s.id}" ${f.speaker === s.id ? 'selected' : ''}>${esc(s.name)} · ${esc(s.company)}</option>`).join('')}
         </select>
         ${sourceFilter('requests')}
+        ${tagFilter('requests')}
         <span id="count" class="ml-auto text-sm text-slate-500"></span>
       </div>
       <div id="view-body"></div>
@@ -772,56 +911,71 @@ function renderRequests() {
 
 function renderRequestsBody() {
   const rows = requestRows();
+  const d = derived();
+  pruneSelection('requests', rows.map(({ r }) => r.id));
   document.getElementById('count').textContent = `${rows.length} shown`;
   const head = `<tr>
+    ${selectAllCell('requests', rows.map(({ r }) => r.id))}
     ${sortHeader('requests', 'number', '#', 'w-12')}
     ${sortHeader('requests', 'investor', 'Investor')}
     ${sortHeader('requests', 'speaker', 'Speaker')}
     ${sortHeader('requests', 'rank', 'Pref.', 'w-16')}
     ${sortHeader('requests', 'status', 'Status')}
     <th class="px-4 py-2.5 text-left font-medium">Source</th>
-    <th class="px-4 py-2.5 text-left font-medium">Notes</th>
+    <th class="px-4 py-2.5 text-left font-medium">Tags & notes</th>
     ${sortHeader('requests', 'created', 'Created')}
   </tr>`;
   const body = rows.length
     ? rows
         .map(
-          ({ r, sub, sp }) => `<tr data-open="request" data-id="${r.id}" class="cursor-pointer bg-white hover:bg-slate-50">
+          ({ r, sub, sp }) => `<tr data-open="request" data-id="${r.id}" class="cursor-pointer hover:bg-slate-50 ${state.selected.requests.has(r.id) ? 'bg-brand-50/60' : 'bg-white'}">
+          ${selectCell('requests', r.id)}
           <td class="px-4 py-3 text-xs tabular-nums text-slate-400">${r.request_number}</td>
           <td class="whitespace-nowrap px-4 py-3"><div class="font-medium">${esc(fullName(sub))}</div><div class="text-xs text-slate-500">${esc(sub?.company || sub?.email || '')}</div></td>
           <td class="whitespace-nowrap px-4 py-3"><div>${esc(sp?.name || '—')}</div><div class="text-xs text-slate-500">${esc(sp?.company || '')}</div></td>
           <td class="px-4 py-3 text-slate-500 tabular-nums">${r.preference_rank ? '#' + r.preference_rank : '—'}</td>
           <td class="px-4 py-3" data-stop>${statusSelect('request', r.id, r.status)}</td>
           <td class="px-4 py-3">${sourceBadge(r.source, r.created_by)}</td>
-          <td class="max-w-64 px-4 py-3"><p class="truncate text-slate-500">${esc(r.internal_notes || '')}</p></td>
+          <td class="max-w-72 px-4 py-3">
+            <div class="flex flex-wrap gap-1">${flagChips(d.flagsOf(r))}${tagChips(r.tags)}</div>
+            ${r.internal_notes ? `<p class="mt-1 truncate text-slate-500">${esc(r.internal_notes)}</p>` : ''}
+          </td>
           <td class="whitespace-nowrap px-4 py-3 text-slate-500" title="${esc(fmtDate(r.created_at))}">${esc(timeAgo(r.created_at))}</td>
         </tr>`,
         )
         .join('')
-    : emptyRow(8, state.data.requests.length ? 'No requests match these filters.' : 'No meeting requests yet. They appear here as soon as an investor books.');
+    : emptyRow(9, state.data.requests.length ? 'No requests match these filters.' : 'No meeting requests yet. They appear here as soon as an investor books.');
   document.getElementById('view-body').innerHTML = tableWrap(head, body);
 }
 
 // ---------------------------------------------------------------------------
 // Investors
 // ---------------------------------------------------------------------------
+// stage chips (automatic, from their requests) + test + archived
 const INVESTOR_CHIPS = [
-  { id: 'all', label: 'All', test: (s) => !s.archived_at && s.status !== 'test' },
-  ...SUBMISSION_STATUSES.map((s) => ({ id: s.value, label: s.label, tone: s.tone, test: (x) => !x.archived_at && x.status === s.value })),
+  { id: 'all', label: 'All', test: (s) => !s.archived_at && !hasTestTag(s) },
+  ...STAGES.map((st) => ({ id: st.value, label: st.label, tone: st.tone, test: (s, d) => !s.archived_at && !hasTestTag(s) && d.stageOf(s.id) === st.value })),
+  { id: 'test', label: 'Test', tone: 'yellow', test: (s) => !s.archived_at && hasTestTag(s) },
   { id: 'archived', label: 'Archived', tone: 'gray', test: (s) => Boolean(s.archived_at) },
 ];
-const investorChipItems = () => INVESTOR_CHIPS.map((c) => ({ ...c, count: state.data.submissions.filter(c.test).length }));
+const investorChipItems = () => {
+  const d = derived();
+  return INVESTOR_CHIPS.map((c) => ({ ...c, count: state.data.submissions.filter((s) => c.test(s, d)).length }));
+};
+const stageOrder = Object.fromEntries(STAGES.map((st, i) => [st.value, i]));
+const stagePill = (stage) => `<span title="${esc(STAGE[stage].hint)}">${pill(STAGE[stage].label, STAGE[stage].tone)}</span>`;
 
 function investorRows() {
   const f = state.filters.investors;
   const d = derived();
   const chip = INVESTOR_CHIPS.find((c) => c.id === f.chip) || INVESTOR_CHIPS[0];
   const rows = state.data.submissions
-    .map((s) => ({ s, reqs: d.requestsBySubmission.get(s.id) || [] }))
-    .filter(({ s }) => chip.test(s))
+    .filter((s) => chip.test(s, d))
+    .map((s) => ({ s, reqs: (d.requestsBySubmission.get(s.id) || []).filter((r) => !r.archived_at), stage: d.stageOf(s.id) }))
     .filter(({ s }) => !f.source || s.source === f.source)
+    .filter(({ s }) => !f.tag || (s.tags || []).includes(f.tag))
     .filter(({ s, reqs }) =>
-      matches(f.q, fullName(s), s.email, s.company, s.linkedin, s.notes, ...reqs.map((r) => d.speakerById.get(r.speaker_id)?.name)),
+      matches(f.q, fullName(s), s.email, s.company, s.linkedin, s.notes, ...(s.tags || []), ...reqs.map((r) => d.speakerById.get(r.speaker_id)?.name)),
     );
   return sortRows(
     rows,
@@ -829,7 +983,7 @@ function investorRows() {
       investor: ({ s }) => fullName(s).toLowerCase(),
       email: ({ s }) => s.email,
       speakers: ({ reqs }) => reqs.length,
-      status: ({ s }) => SUBMISSION_STATUSES.findIndex((x) => x.value === s.status),
+      stage: ({ stage }) => stageOrder[stage],
       created: ({ s }) => s.created_at,
     },
     f.sort,
@@ -838,19 +992,19 @@ function investorRows() {
 
 function renderInvestors() {
   const main = document.getElementById('main');
-  const { submissions } = state.data;
   main.innerHTML =
     pageHeader(
       'Investors',
-      'Everyone who booked on the website or was added by the team, with the speakers they asked for.',
+      'Everyone who booked on the website or was added by the team. The stage follows their meeting requests automatically.',
       `<button data-export="investors" class="${BTN_SECONDARY}">${icon('download', 'size-4')} Export CSV</button>
        <button data-action="new-investor" class="${BTN_PRIMARY}">${icon('plus', 'size-4')} New investor</button>`,
     ) +
     `<div class="space-y-4 p-6">
       <div id="chips">${chips('investors', investorChipItems())}</div>
       <div class="flex flex-wrap items-center gap-3">
-        ${searchBox('investors', 'Search name, email, company, speaker…')}
+        ${searchBox('investors', 'Search name, email, company, speaker, tag…')}
         ${sourceFilter('investors')}
+        ${tagFilter('investors')}
         <span id="count" class="ml-auto text-sm text-slate-500"></span>
       </div>
       <div id="view-body"></div>
@@ -861,26 +1015,29 @@ function renderInvestors() {
 function renderInvestorsBody() {
   const rows = investorRows();
   const d = derived();
+  pruneSelection('investors', rows.map(({ s }) => s.id));
   document.getElementById('count').textContent = `${rows.length} shown`;
   const head = `<tr>
+    ${selectAllCell('investors', rows.map(({ s }) => s.id))}
     ${sortHeader('investors', 'investor', 'Investor')}
     ${sortHeader('investors', 'email', 'Contact')}
     ${sortHeader('investors', 'speakers', 'Speakers requested')}
-    ${sortHeader('investors', 'status', 'Status')}
+    ${sortHeader('investors', 'stage', 'Stage')}
     ${sortHeader('investors', 'created', 'Created')}
   </tr>`;
   const body = rows.length
     ? rows
-        .map(({ s, reqs }) => {
+        .map(({ s, reqs, stage }) => {
           const linkedin = safeUrl(s.linkedin);
-          return `<tr data-open="investor" data-id="${s.id}" class="cursor-pointer bg-white hover:bg-slate-50">
+          return `<tr data-open="investor" data-id="${s.id}" class="cursor-pointer hover:bg-slate-50 ${state.selected.investors.has(s.id) ? 'bg-brand-50/60' : 'bg-white'}">
+            ${selectCell('investors', s.id)}
             <td class="px-4 py-3">
               <div class="flex items-center gap-3">
                 <span class="flex size-8 shrink-0 items-center justify-center rounded-full bg-brand-50 text-xs font-semibold text-brand-700">${esc(initials(s))}</span>
                 <div class="whitespace-nowrap">
                   <div class="font-medium">${esc(fullName(s))}</div>
                   <div class="text-xs text-slate-500">${esc(s.company || '')}</div>
-                  <div class="mt-1 flex gap-1">${sourceBadge(s.source, s.created_by)}${sendsBadge(d.websiteSends(s.id))}${s.archived_at ? pill('Archived', 'gray') : ''}</div>
+                  <div class="mt-1 flex flex-wrap gap-1">${sourceBadge(s.source, s.created_by)}${sendsBadge(d.websiteSends(s.id))}${s.archived_at ? pill('Archived', 'gray') : ''}${tagChips(s.tags)}</div>
                 </div>
               </div>
             </td>
@@ -899,12 +1056,12 @@ function renderInvestorsBody() {
                   .join('') || '<span class="text-xs text-slate-400">—</span>'}
               </div>
             </td>
-            <td class="px-4 py-3" data-stop>${statusSelect('submission', s.id, s.status)}</td>
+            <td class="px-4 py-3">${stagePill(stage)}</td>
             <td class="whitespace-nowrap px-4 py-3 text-slate-500" title="${esc(fmtDate(s.created_at))}">${esc(timeAgo(s.created_at))}</td>
           </tr>`;
         })
         .join('')
-    : emptyRow(5, state.data.submissions.length ? 'No investors match these filters.' : 'No submissions yet.');
+    : emptyRow(6, state.data.submissions.length ? 'No investors match these filters.' : 'No submissions yet.');
   document.getElementById('view-body').innerHTML = tableWrap(head, body);
 }
 
@@ -969,8 +1126,10 @@ function renderSpeakers() {
 
 function renderSpeakersBody() {
   const rows = speakerRows();
+  pruneSelection('speakers', rows.map(({ s }) => s.id));
   document.getElementById('count').textContent = `${rows.length} shown`;
   const head = `<tr>
+    ${selectAllCell('speakers', rows.map(({ s }) => s.id))}
     ${sortHeader('speakers', 'name', 'Speaker')}
     ${sortHeader('speakers', 'capacity', 'Capacity', 'w-28')}
     <th class="px-4 py-2.5 text-left font-medium">Availability</th>
@@ -983,7 +1142,8 @@ function renderSpeakersBody() {
     ? rows
         .map(({ s, a }) => {
           const st = CAPACITY_STATUSES[a?.status] || CAPACITY_STATUSES.available;
-          return `<tr data-open="speaker" data-id="${s.id}" class="cursor-pointer bg-white hover:bg-slate-50">
+          return `<tr data-open="speaker" data-id="${s.id}" class="cursor-pointer hover:bg-slate-50 ${state.selected.speakers.has(s.id) ? 'bg-brand-50/60' : 'bg-white'}">
+            ${selectCell('speakers', s.id)}
             <td class="whitespace-nowrap px-4 py-3"><div class="font-medium">${esc(s.name)}</div><div class="text-xs text-slate-500">${esc(s.company)} · <span class="font-mono">${esc(s.slug)}</span></div></td>
             <td class="px-4 py-3" data-stop>
               <input data-action="speaker-capacity" data-id="${s.id}" type="number" min="0" max="99" value="${s.capacity}" aria-label="Capacity"
@@ -997,7 +1157,7 @@ function renderSpeakersBody() {
           </tr>`;
         })
         .join('')
-    : emptyRow(7, state.data.speakers.length ? 'No speakers match these filters.' : 'No speakers yet.');
+    : emptyRow(8, state.data.speakers.length ? 'No speakers match these filters.' : 'No speakers yet.');
   document.getElementById('view-body').innerHTML = tableWrap(head, body);
 }
 
@@ -1040,9 +1200,13 @@ function openDrawer({ title, subtitle = '', body, footerLeft = '', submitLabel =
   drawerKeyHandler = (e) => e.key === 'Escape' && closeDrawer();
   document.addEventListener('keydown', drawerKeyHandler);
 
+  form.addEventListener('focusout', (e) => {
+    if (e.target.matches?.('[data-tag-input]')) commitTagInput(e.target);
+  });
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (!onSubmit) return;
+    form.querySelectorAll('[data-tag-input]').forEach(commitTagInput);
     const btn = form.querySelector('button:not([type])');
     btn.disabled = true;
     try {
@@ -1085,6 +1249,7 @@ function openRequest(id) {
     title: `Request #${r.request_number}`,
     subtitle: `${esc(fullName(sub))} → ${esc(sp?.name || '?')}`,
     body:
+      (d.flagsOf(r).length ? `<div class="flex flex-wrap gap-1.5">${d.flagsOf(r).map((f) => `<span title="${esc(f.title)}">${pill(f.label, f.tone)}</span> <span class="text-xs text-slate-500">${esc(f.title)}</span>`).join('<span class="w-full"></span>')}</div>` : '') +
       section(
         'Details',
         `<dl class="divide-y divide-slate-100 rounded-lg border border-slate-200 px-4 py-1">
@@ -1113,9 +1278,14 @@ function openRequest(id) {
           ${field('Ends', input('scheduled_end', toLocalInput(r.scheduled_end), 'type="datetime-local"'))}
         </div>`,
       ) +
+      section('Tags', tagsEditor('tags', r.tags, d.allTags)) +
       section('Internal notes', textarea('internal_notes', r.internal_notes, 5)),
+    footerLeft: r.archived_at
+      ? `<button type="button" data-action="restore-request" data-id="${r.id}" class="${BTN_SECONDARY}">Restore</button>`
+      : `<button type="button" data-action="archive-request" data-id="${r.id}" class="${BTN_DANGER}">Archive</button>`,
     onSubmit: async (fd) => {
       await state.store.updateRequest(r.id, {
+        tags: JSON.parse(fd.get('tags') || '[]'),
         status: fd.get('status'),
         closure_reason: nullIfEmpty(fd.get('closure_reason')),
         hold_until: fromLocalInput(fd.get('hold_until')),
@@ -1255,8 +1425,10 @@ function openInvestor(id) {
       section(
         'Follow-up',
         `<div class="grid gap-4 sm:grid-cols-2">
-          ${field('Status', select('status', SUBMISSION_STATUSES, s.status))}
+          <div><span class="mb-1 block text-sm font-medium text-slate-700">Stage</span>${stagePill(d.stageOf(s.id))}
+            <span class="mt-1 block text-xs text-slate-500">Automatic: ${esc(STAGE[d.stageOf(s.id)].hint.toLowerCase())}.</span></div>
           ${field('Assignee', select('assignee', assigneeOptions(), s.assignee, 'Nobody'))}
+          <div class="sm:col-span-2"><span class="mb-1 block text-sm font-medium text-slate-700">Tags</span>${tagsEditor('tags', s.tags, d.allTags)}</div>
           <div class="sm:col-span-2">${field('Notes', textarea('notes', s.notes))}</div>
         </div>`,
       ) +
@@ -1271,7 +1443,7 @@ function openInvestor(id) {
         email: String(fd.get('email')).trim().toLowerCase(),
         company: nullIfEmpty(fd.get('company')),
         linkedin: nullIfEmpty(fd.get('linkedin')),
-        status: fd.get('status'),
+        tags: JSON.parse(fd.get('tags') || '[]'),
         assignee: nullIfEmpty(fd.get('assignee')),
         notes: nullIfEmpty(fd.get('notes')),
       });
@@ -1611,6 +1783,159 @@ async function openSync(source = 'live') {
 }
 
 // ---------------------------------------------------------------------------
+// Bulk editing
+// ---------------------------------------------------------------------------
+// keep only ticked rows that are still visible (filters, chips, search)
+function pruneSelection(view, visibleIds) {
+  const visible = new Set(visibleIds);
+  for (const id of state.selected[view]) if (!visible.has(id)) state.selected[view].delete(id);
+  setTimeout(() => {
+    document.querySelectorAll('[data-indeterminate]').forEach((el) => (el.indeterminate = true));
+    renderBulkBar();
+  }, 0);
+}
+
+const rowsOf = (view) => ({ requests: state.data.requests, investors: state.data.submissions, speakers: state.data.speakers })[view];
+const NOUN = { requests: ['request', 'requests'], investors: ['investor', 'investors'], speakers: ['speaker', 'speakers'] };
+const noun = (view, n) => `${n} ${NOUN[view][n === 1 ? 0 : 1]}`;
+
+function renderBulkBar() {
+  const root = document.getElementById('bulk-root');
+  if (!root) return;
+  const view = state.view;
+  const sel = state.selected[view];
+  if (!sel || !sel.size) {
+    root.innerHTML = '';
+    return;
+  }
+  const d = derived();
+  const picked = rowsOf(view).filter((r) => sel.has(r.id));
+  const anyArchived = picked.some((r) => (view === 'requests' ? d.requestArchived(r) : r.archived_at));
+  const anyActive = picked.some((r) => (view === 'requests' ? !r.archived_at : !r.archived_at));
+  const tagsInSelection = [...new Set(picked.flatMap((r) => r.tags || []))].sort();
+  const mini = 'rounded-lg border border-slate-300 bg-white py-1.5 pr-7 pl-2.5 text-sm shadow-xs focus:border-brand-500 focus:outline-none';
+  const btn = 'inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-sm font-medium';
+  const assign = `<select data-bulk="assignee" class="${mini}"><option value="">Assign…</option><option value="__none">Nobody</option>${state.data.admins
+    .map((a) => `<option value="${esc(a.email)}">${esc(a.name || a.email)}</option>`)
+    .join('')}</select>`;
+  const tagControls =
+    view === 'speakers'
+      ? ''
+      : `<span class="inline-flex items-center gap-1"><input data-bulk-tag-input list="tag-suggestions-bulk" placeholder="Add tag" class="w-28 ${mini} pr-2.5">
+          <button data-bulk="add-tag" class="${btn} bg-slate-100 text-slate-700 hover:bg-slate-200">${icon('plus', 'size-4')}</button></span>
+         <datalist id="tag-suggestions-bulk">${[...new Set([TEST_TAG, ...d.allTags])].map((t) => `<option value="${esc(t)}">`).join('')}</datalist>
+         ${tagsInSelection.length ? `<select data-bulk="remove-tag" class="${mini}"><option value="">Remove tag…</option>${tagsInSelection.map((t) => `<option value="${esc(t)}">#${esc(t)}</option>`).join('')}</select>` : ''}`;
+  const specific = {
+    requests: `<select data-bulk="status" class="${mini}"><option value="">Set status…</option>${REQUEST_STATUSES.map((x) => `<option value="${x.value}">${esc(x.label)}</option>`).join('')}</select>${assign}`,
+    investors: assign,
+    speakers: `<select data-bulk="availability" class="${mini}"><option value="">Availability…</option>${SPEAKER_STATES.map((x) => `<option value="${x.value}">${esc(x.label)}</option>`).join('')}</select>
+      <span class="inline-flex items-center gap-1"><input data-bulk-capacity type="number" min="0" max="99" placeholder="Capacity" class="w-24 ${mini} pr-2.5">
+      <button data-bulk="capacity" class="${btn} bg-slate-100 text-slate-700 hover:bg-slate-200">Set</button></span>`,
+  }[view];
+
+  root.innerHTML = `<div class="fixed inset-x-0 bottom-4 z-30 flex justify-center px-4">
+    <div class="flex max-w-full flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-xl" role="toolbar" aria-label="Bulk actions">
+      <span class="px-1 text-sm font-semibold text-slate-900">${noun(view, sel.size)} selected</span>
+      <span class="h-5 w-px bg-slate-200"></span>
+      ${specific}
+      ${tagControls}
+      ${anyActive ? `<button data-bulk="archive" class="${btn} text-rose-600 hover:bg-rose-50">Archive</button>` : ''}
+      ${anyArchived ? `<button data-bulk="restore" class="${btn} text-slate-700 hover:bg-slate-100">Restore</button>` : ''}
+      <button data-bulk="export" class="${btn} text-slate-700 hover:bg-slate-100">${icon('download', 'size-4')} Export</button>
+      <button data-bulk="clear" class="${btn} text-slate-500 hover:bg-slate-100">Clear</button>
+    </div>
+  </div>`;
+}
+
+// apply one change to all ticked rows, with Undo
+async function bulkChange(view, patch, message) {
+  const ids = [...state.selected[view]];
+  const fields = Object.keys(patch);
+  const before = rowsOf(view)
+    .filter((r) => ids.includes(r.id))
+    .map((r) => Object.fromEntries([['id', r.id], ...fields.map((f) => [f, r[f] ?? null])]));
+  await state.store.bulkUpdate(view, ids, patch);
+  await reload();
+  toast(message, 'success', {
+    label: 'Undo',
+    onClick: async () => {
+      try {
+        await state.store.restoreRows(view, before);
+        await reload();
+        toast('Undone.');
+      } catch (err) {
+        toast(errorText(err), 'error');
+      }
+    },
+  });
+}
+
+async function bulkTags(view, add, remove, message) {
+  const ids = [...state.selected[view]];
+  const before = rowsOf(view)
+    .filter((r) => ids.includes(r.id))
+    .map((r) => ({ id: r.id, tags: r.tags || [] }));
+  await state.store.setTags(view, ids, add, remove);
+  await reload();
+  toast(message, 'success', {
+    label: 'Undo',
+    onClick: async () => {
+      await state.store.restoreRows(view, before);
+      await reload();
+      toast('Undone.');
+    },
+  });
+}
+
+async function runBulk(action, el) {
+  const view = state.view;
+  const n = state.selected[view].size;
+  if (!n) return;
+  const what = noun(view, n);
+  try {
+    if (action === 'clear') {
+      state.selected[view].clear();
+      return BODIES[view]();
+    }
+    if (action === 'export') return exportView(view, true);
+    if (action === 'status' && el.value) {
+      return await bulkChange(view, { status: el.value }, `${what} set to “${REQUEST_STATUS[el.value].label}”.`);
+    }
+    if (action === 'assignee' && el.value) {
+      const who = el.value === '__none' ? null : el.value;
+      return await bulkChange(view, { assignee: who }, `${what} assigned to ${who || 'nobody'}.`);
+    }
+    if (action === 'availability' && el.value) {
+      return await bulkChange(view, { availability: el.value }, `${what} set to “${SPEAKER_STATE[el.value].label}”.`);
+    }
+    if (action === 'capacity') {
+      const capacity = Number(document.querySelector('[data-bulk-capacity]').value);
+      if (!Number.isInteger(capacity) || capacity < 0) throw new Error('Capacity must be a whole number, 0 or more.');
+      return await bulkChange(view, { capacity }, `Capacity of ${what} set to ${capacity}.`);
+    }
+    if (action === 'add-tag') {
+      const tag = document.querySelector('[data-bulk-tag-input]').value.trim().toLowerCase().replace(/^#/, '');
+      if (!tag) throw new Error('Type a tag first.');
+      return await bulkTags(view, [tag], [], `#${tag} added to ${what}.`);
+    }
+    if (action === 'remove-tag' && el.value) {
+      return await bulkTags(view, [], [el.value], `#${el.value} removed from ${what}.`);
+    }
+    if (action === 'archive') {
+      const extra = view === 'investors' ? ' Their requests are archived with them and stop taking places.' : view === 'requests' ? ' Archived requests stop taking places.' : ' They can’t be booked on the website anymore.';
+      if (!confirm(`Archive ${what}?${extra} You can restore them from the Archived filter.`)) return;
+      return await bulkChange(view, { archived_at: new Date().toISOString() }, `${what} archived.`);
+    }
+    if (action === 'restore') {
+      return await bulkChange(view, { archived_at: null }, `${what} restored.`);
+    }
+  } catch (err) {
+    toast(errorText(err), 'error');
+    reload();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // CSV export
 // ---------------------------------------------------------------------------
 function csvCell(value) {
@@ -1629,13 +1954,15 @@ function download(name, header, rows) {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
-function exportView(view) {
+function exportView(view, selectedOnly = false) {
   const d = derived();
+  // bulk bar → export only the ticked rows
+  const only = (rows, idOf) => (selectedOnly ? rows.filter((x) => state.selected[view].has(idOf(x))) : rows);
   if (view === 'requests') {
     download(
       'meeting-requests',
-      ['Request #', 'Status', 'Source', 'First name', 'Last name', 'Email', 'Company', 'LinkedIn', 'Speaker', 'Speaker company', 'Preference', 'Submitted', 'Hold until', 'Starts', 'Ends', 'Closure reason', 'Assignee', 'Notes'],
-      requestRows().map(({ r, sub, sp }) => [
+      ['Request #', 'Status', 'Source', 'First name', 'Last name', 'Email', 'Company', 'LinkedIn', 'Speaker', 'Speaker company', 'Preference', 'Submitted', 'Hold until', 'Starts', 'Ends', 'Closure reason', 'Assignee', 'Tags', 'Flags', 'Notes'],
+      only(requestRows(), ({ r }) => r.id).map(({ r, sub, sp }) => [
         r.request_number,
         REQUEST_STATUS[r.status]?.label,
         SOURCES[r.source]?.label,
@@ -1653,25 +1980,28 @@ function exportView(view) {
         r.scheduled_end ? fmtDate(r.scheduled_end) : '',
         CLOSURE_REASONS.find((c) => c.value === r.closure_reason)?.label,
         r.assignee,
+        (r.tags || []).join(' '),
+        d.flagsOf(r).map((f) => f.label).join('; '),
         r.internal_notes,
       ]),
     );
   } else if (view === 'investors') {
     download(
       'investors',
-      ['First name', 'Last name', 'Email', 'Company', 'LinkedIn', 'Status', 'Source', 'Website submissions', 'Speakers (status)', 'Created', 'Assignee', 'Notes', 'Archived', 'Booking ID'],
-      investorRows().map(({ s, reqs }) => [
+      ['First name', 'Last name', 'Email', 'Company', 'LinkedIn', 'Stage', 'Source', 'Website submissions', 'Speakers (status)', 'Created', 'Assignee', 'Tags', 'Notes', 'Archived', 'Booking ID'],
+      only(investorRows(), ({ s }) => s.id).map(({ s, reqs, stage }) => [
         s.first_name,
         s.last_name,
         s.email,
         s.company,
         s.linkedin,
-        SUBMISSION_STATUS[s.status]?.label,
+        STAGE[stage]?.label,
         SOURCES[s.source]?.label,
         d.websiteSends(s.id),
         reqs.map((r) => `${d.speakerById.get(r.speaker_id)?.name} (${REQUEST_STATUS[r.status]?.label})`).join('; '),
         fmtDate(s.created_at),
         s.assignee,
+        (s.tags || []).join(' '),
         s.notes,
         s.archived_at ? fmtDate(s.archived_at) : '',
         s.booking_id,
@@ -1681,7 +2011,7 @@ function exportView(view) {
     download(
       'speakers',
       ['Name', 'Company', 'Slug', 'Capacity', 'Availability', 'Taken', 'Confirmed', 'Waitlisted', 'Places left', 'Website status'],
-      speakerRows().map(({ s, a }) => [
+      only(speakerRows(), ({ s }) => s.id).map(({ s, a }) => [
         s.name,
         s.company,
         s.slug,
@@ -1712,6 +2042,7 @@ function renderView() {
   }
   VIEWS[state.view]();
   renderNav();
+  renderBulkBar();
 }
 
 // after data changes: keep the toolbar (and search focus), redraw counts + table
@@ -1756,6 +2087,19 @@ function bindEvents() {
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') toggleMobileMenu(false);
+    // tag editor: Enter or comma adds the typed tag (and doesn't submit the side panel)
+    if ((e.key === 'Enter' || e.key === ',') && e.target.matches?.('[data-tag-input]')) {
+      e.preventDefault();
+      commitTagInput(e.target);
+    }
+    if (e.key === 'Backspace' && e.target.matches?.('[data-tag-input]') && !e.target.value) {
+      const editor = e.target.closest('[data-tags-editor]');
+      setEditorTags(editor, editorTags(editor).slice(0, -1));
+    }
+    if (e.key === 'Enter' && e.target.matches?.('[data-bulk-tag-input]')) {
+      e.preventDefault();
+      runBulk('add-tag', e.target);
+    }
     // Enter in the "add a speaker" note adds the speaker instead of saving the whole investor form
     if (e.key === 'Enter' && e.target.matches?.('[data-add-note]')) {
       e.preventDefault();
@@ -1831,6 +2175,37 @@ function bindEvents() {
       return;
     }
 
+    // bulk bar buttons
+    const bulkBtn = t.closest('button[data-bulk]');
+    if (bulkBtn) return runBulk(bulkBtn.dataset.bulk, bulkBtn);
+
+    // tag editor: remove a chip
+    const tagRemove = t.closest('[data-tag-remove]');
+    if (tagRemove) {
+      const editor = tagRemove.closest('[data-tags-editor]');
+      setEditorTags(editor, editorTags(editor).filter((x) => x !== tagRemove.dataset.tagRemove));
+      return;
+    }
+
+    // archive / restore a single request
+    const requestArchive = t.closest('[data-action="archive-request"], [data-action="restore-request"]');
+    if (requestArchive) {
+      const archive = requestArchive.dataset.action === 'archive-request';
+      const r = state.data.requests.find((x) => x.id === requestArchive.dataset.id);
+      if (!r) return;
+      if (archive && !confirm(`Archive request #${r.request_number}? It stops taking a place. You can restore it from the Archived filter.`)) return;
+      try {
+        await state.store.updateRequest(r.id, { archived_at: archive ? new Date().toISOString() : null });
+        closeDrawer();
+        await reload();
+        const sub = state.data.submissions.find((x) => x.id === r.submission_id);
+        toast(!archive && sub?.archived_at ? `Request #${r.request_number} restored, but its investor is still archived.` : `Request #${r.request_number} ${archive ? 'archived' : 'restored'}.`);
+      } catch (err) {
+        toast(errorText(err), 'error');
+      }
+      return;
+    }
+
     const archiveAction = t.closest('[data-action$="-investor"], [data-action$="-speaker"]');
     if (archiveAction && /^(archive|restore)-(investor|speaker)$/.test(archiveAction.dataset.action)) {
       const [verb, kind] = archiveAction.dataset.action.split('-');
@@ -1875,6 +2250,32 @@ function bindEvents() {
   // inline edits in tables and panels
   document.addEventListener('change', async (e) => {
     const el = e.target;
+
+    // row selection
+    if (el.matches('[data-select]')) {
+      const set = state.selected[el.dataset.select];
+      if (el.checked) set.add(el.value);
+      else set.delete(el.value);
+      return BODIES[el.dataset.select]();
+    }
+    if (el.matches('[data-select-all]')) {
+      const view = el.dataset.selectAll;
+      const ids = [...document.querySelectorAll(`[data-select="${view}"]`)].map((c) => c.value);
+      if (el.checked) ids.forEach((id) => state.selected[view].add(id));
+      else ids.forEach((id) => state.selected[view].delete(id));
+      return BODIES[view]();
+    }
+    // bulk bar dropdowns
+    if (el.matches('select[data-bulk]')) {
+      if (!el.value) return;
+      await runBulk(el.dataset.bulk, el);
+      if (document.body.contains(el)) el.value = '';
+      return;
+    }
+    if (el.matches('[data-filter-tag]')) {
+      state.filters[el.dataset.filterTag].tag = el.value;
+      return BODIES[el.dataset.filterTag]();
+    }
     const id = el.dataset.id;
     const action = el.dataset.action;
     if (!action || !id) {
