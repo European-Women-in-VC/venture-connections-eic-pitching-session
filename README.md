@@ -145,6 +145,23 @@ suggests: add new cards, update changed names/companies, follow slug changes (sa
 and close speakers whose card is gone (unticked by default). Logic: `public/eic-team-4k9p/js/sync.js`.
 Page URLs can be overridden with `WEBSITE_URL_LIVE` / `WEBSITE_URL_STAGING`.
 
+**Import form export** (Investors page): upload the CSV from Webflow (Site settings → Forms → Download CSV).
+Every row is checked against the database (`public/eic-team-4k9p/js/import.js`):
+
+- *New investor* / *add speakers*: not in the database yet, ticked. Rows whose Booking status says
+  `NOT SAVED` (API failed) are marked.
+- *Looks like a test*: email/name/LinkedIn containing "test", placeholder domains, a team member's email
+  (also `+alias`), or the same email tagged test / archived in the panel. Not ticked; imported with the `test` tag.
+- *Already in the database*: same Booking ID (or imported before), the investor already has all these
+  speakers, or the same email + speakers sent twice in the file.
+- *Can't be imported*: invalid email, or no speaker the database knows. Speakers are matched by slug,
+  company or name, so old slugs and renamed speakers still match.
+
+Rows are written by `panel_import_submissions()` (migration `20261030090000_form_import.sql`) with their original
+date, source `import` ("Imported" badge) and a history entry. The import key (Booking ID, or `webflow:<email>:<date>`
+for older rows) is stored, so importing the same file again adds nothing. Imported requests take places like
+website bookings, even when a speaker is full (the panel shows a warning on those speakers).
+
 Add a team member: Supabase → Authentication → Users → *Invite user*, and add the same email
 (lowercase) to the `admins` table. Supabase → Authentication → URL Configuration must have
 `https://venture-connections-eic-pitching-se.vercel.app/eic-team-4k9p/` as Site URL / redirect URL.

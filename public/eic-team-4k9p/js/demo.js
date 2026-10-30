@@ -329,6 +329,55 @@ export function createDemoStore() {
       changed();
       return sub.id;
     },
+    // same rules as public.panel_import_submissions (simplified)
+    async importSubmissions(rows, status = 'new_request') {
+      const results = [];
+      for (const row of [...rows].sort((a, b) => String(a.submittedAt).localeCompare(String(b.submittedAt)))) {
+        const done = db.events.find((e) => e.booking_id === row.key);
+        if (done) {
+          results.push({ key: row.key, ok: true, duplicate: true, submission_id: done.submission_id });
+          continue;
+        }
+        const at = row.submittedAt || now();
+        let sub = db.submissions.find((s) => s.email === row.email && !s.archived_at);
+        const created = !sub;
+        if (created) {
+          sub = {
+            id: uuid(), booking_id: row.key, email: row.email, first_name: row.firstName || null, last_name: row.lastName || null,
+            company: row.company || null, linkedin: row.linkedin || null, speaker_slugs: [], status: 'todo', source: 'import',
+            created_by: DEMO_ADMIN, assignee: null, notes: null, meta: {}, tags: [], archived_at: null, archived_by: null,
+            created_at: at, updated_at: now(),
+          };
+          db.submissions.push(sub);
+        }
+        sub.tags = [...new Set([...(sub.tags || []), ...row.tags])].sort();
+        const have = new Set(db.requests.filter((r) => r.submission_id === sub.id).map((r) => r.speaker_id));
+        let rank = Math.max(0, ...db.requests.filter((r) => r.submission_id === sub.id).map((r) => r.preference_rank || 0));
+        const slugOf = (id) => db.speakers.find((s) => s.id === id)?.slug;
+        const added = [];
+        for (const id of row.speakerIds) {
+          if (have.has(id) || !slugOf(id)) continue;
+          have.add(id);
+          added.push(slugOf(id));
+          db.requests.push({
+            id: uuid(), request_number: db.requests.length + 1, submission_id: sub.id, speaker_id: id, status,
+            preference_rank: ++rank, source: 'import', created_by: DEMO_ADMIN, hold_until: null, speaker_response_at: null,
+            scheduled_start: null, scheduled_end: null, confirmation_sent_at: null, closure_reason: null, assignee: null,
+            internal_notes: null, tags: [...row.tags], archived_at: null, archived_by: null, created_at: at, updated_at: now(),
+          });
+        }
+        sub.speaker_slugs.push(...added.filter((s) => !sub.speaker_slugs.includes(s)));
+        const picked = row.speakerIds.map(slugOf).filter(Boolean);
+        db.events.push({
+          id: uuid(), submission_id: sub.id, booking_id: row.key, source: 'import', created_by: DEMO_ADMIN,
+          payload: { ...row.payload, action: 'import', status }, speaker_slugs: picked, added_slugs: added,
+          skipped_slugs: picked.filter((s) => !added.includes(s)), created_at: at,
+        });
+        results.push({ key: row.key, ok: true, submission_id: sub.id, created, added, skipped: picked.filter((s) => !added.includes(s)) });
+      }
+      changed();
+      return clone(results);
+    },
     // fake website: one company renamed, one slug changed, one new card, one speaker removed
     async fetchWebsiteSpeakers(source = 'live') {
       await new Promise((r) => setTimeout(r, 300));

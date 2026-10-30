@@ -7,6 +7,7 @@ import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 import { createSupabaseStore } from './store.js';
 import { createDemoStore } from './demo.js';
 import { changeFor, diffSpeakers } from './sync.js';
+import { analyzeImport, importRow, readFormExport } from './import.js';
 import {
   CAPACITY_STATUSES,
   CLOSED,
@@ -164,6 +165,7 @@ const ICONS = {
   speakers: '<path stroke-linecap="round" stroke-linejoin="round" d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z" />',
   search: '<path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />',
   download: '<path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />',
+  upload: '<path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" />',
   close: '<path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />',
   plus: '<path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />',
   logout: '<path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15m3 0 3-3m0 0-3-3m3 3H9" />',
@@ -333,10 +335,16 @@ const selectAllCell = (view, ids) => {
 const selectCell = (view, id) =>
   `<td class="w-10 px-4 py-3" data-stop><input type="checkbox" data-select="${view}" value="${esc(id)}" ${state.selected[view].has(id) ? 'checked' : ''} class="${CHECK}" aria-label="Select row"></td>`;
 
-const sourceBadge = (source, by) =>
-  source === 'panel'
-    ? `<span class="inline-flex items-center rounded px-1.5 py-0.5 text-[11px] leading-4 font-medium bg-brand-50 text-brand-700 ring-1 ring-inset ring-brand-600/20" title="${esc(SOURCES.panel.title + (by ? ' — ' + by : ''))}">${SOURCES.panel.label}</span>`
-    : `<span class="inline-flex items-center rounded px-1.5 py-0.5 text-[11px] leading-4 font-medium bg-slate-50 text-slate-500 ring-1 ring-inset ring-slate-300/70" title="${esc(SOURCES.website.title)}">${SOURCES.website.label}</span>`;
+const SOURCE_STYLES = {
+  website: 'bg-slate-50 text-slate-500 ring-slate-300/70',
+  panel: 'bg-brand-50 text-brand-700 ring-brand-600/20',
+  import: 'bg-sky-50 text-sky-700 ring-sky-600/20',
+};
+const sourceBadge = (source, by) => {
+  const s = SOURCES[source] ? source : 'website';
+  const title = SOURCES[s].title + (s !== 'website' && by ? ' — ' + by : '');
+  return `<span class="inline-flex items-center rounded px-1.5 py-0.5 text-[11px] leading-4 font-medium ring-1 ring-inset ${SOURCE_STYLES[s]}" title="${esc(title)}">${SOURCES[s].label}</span>`;
+};
 const sendsBadge = (n) =>
   n > 1
     ? `<span class="inline-flex items-center rounded px-1.5 py-0.5 text-[11px] leading-4 font-medium bg-amber-50 text-amber-800 ring-1 ring-inset ring-amber-600/25" title="Submitted the website form ${n} times">Sent ${n}×</span>`
@@ -345,6 +353,7 @@ const sourceFilter = (view) => `<select data-filter-source="${view}" class="${SE
     <option value="">All sources</option>
     <option value="website" ${state.filters[view].source === 'website' ? 'selected' : ''}>From the website</option>
     <option value="panel" ${state.filters[view].source === 'panel' ? 'selected' : ''}>Added by the team</option>
+    <option value="import" ${state.filters[view].source === 'import' ? 'selected' : ''}>Imported (form export)</option>
   </select>`;
 
 const statusOrder = Object.fromEntries(REQUEST_STATUSES.map((s, i) => [s.value, i]));
@@ -1001,6 +1010,7 @@ function renderInvestors() {
       'Investors',
       'Everyone who booked on the website or was added by the team. The stage follows their meeting requests automatically.',
       `<button data-export="investors" class="${BTN_SECONDARY}">${icon('download', 'size-4')} Export CSV</button>
+       <button data-action="import-csv" class="${BTN_SECONDARY}">${icon('upload', 'size-4')} Import form export</button>
        <button data-action="new-investor" class="${BTN_PRIMARY}">${icon('plus', 'size-4')} New investor</button>`,
     ) +
     `<div class="space-y-4 p-6">
@@ -1176,11 +1186,11 @@ function closeDrawer() {
   drawerKeyHandler = null;
 }
 
-function openDrawer({ title, subtitle = '', body, footerLeft = '', submitLabel = 'Save changes', onSubmit }) {
+function openDrawer({ title, subtitle = '', body, footerLeft = '', submitLabel = 'Save changes', onSubmit, wide = false }) {
   drawerRoot.innerHTML = `
     <div class="fixed inset-0 z-40" role="dialog" aria-modal="true">
       <div class="absolute inset-0 bg-slate-900/30 backdrop-blur-[1px]" data-close></div>
-      <form id="drawer-form" class="absolute inset-y-0 right-0 flex w-full max-w-xl flex-col bg-white shadow-2xl">
+      <form id="drawer-form" class="absolute inset-y-0 right-0 flex w-full ${wide ? 'max-w-3xl' : 'max-w-xl'} flex-col bg-white shadow-2xl">
         <div class="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-4">
           <div class="min-w-0">
             <h2 class="truncate text-lg font-semibold">${title}</h2>
@@ -1330,10 +1340,12 @@ function historyList(sub, d) {
   const RAW_LABELS = { firstName: 'First name', lastName: 'Last name', email: 'Email', company: 'Company', linkedin: 'LinkedIn', speakers: 'Speakers', page: 'Page', userAgent: 'Browser' };
   return `<ol class="space-y-3">${events
     .map((e) => {
-      const website = e.source === 'website';
-      const action = website
+      const website = e.source === 'website' || e.source === 'import';
+      const action = e.source === 'website'
         ? 'Submitted the website form'
-        : e.payload?.action === 'create_investor'
+        : e.source === 'import'
+          ? 'Website form, imported from the export'
+          : e.payload?.action === 'create_investor'
           ? 'Investor created by the team'
           : 'Speakers added by the team';
       const raw = website
@@ -1407,7 +1419,7 @@ function openInvestor(id) {
                 return `<li class="flex items-center gap-3 px-3 py-2.5">
                   <span class="w-6 text-xs tabular-nums text-slate-400">#${r.preference_rank || '–'}</span>
                   <button type="button" data-open="request" data-id="${r.id}" class="min-w-0 flex-1 text-left">
-                    <span class="flex items-center gap-1.5 text-sm font-medium hover:text-brand-600"><span class="truncate">${esc(sp?.name || '?')}</span>${r.source === 'panel' ? sourceBadge(r.source, r.created_by) : ''}</span>
+                    <span class="flex items-center gap-1.5 text-sm font-medium hover:text-brand-600"><span class="truncate">${esc(sp?.name || '?')}</span>${r.source !== 'website' ? sourceBadge(r.source, r.created_by) : ''}</span>
                     <span class="block truncate text-xs text-slate-500">${esc(sp?.company || '')}</span>
                   </button>
                   ${statusSelect('request', r.id, r.status)}
@@ -1787,6 +1799,156 @@ async function openSync(source = 'live') {
 }
 
 // ---------------------------------------------------------------------------
+// Import the Webflow form export (CSV): pick what's missing, skip what exists, leave tests out
+// ---------------------------------------------------------------------------
+const IMPORT_GROUPS = [
+  { kind: 'new', title: 'Missing: new investors', short: 'new', hint: 'Not in the database. Imported with their original date.', tone: 'green', checked: true },
+  { kind: 'adds', title: 'Missing: speakers for existing investors', short: 'add speakers', hint: 'Only the missing speakers are added; the team’s edits stay as they are.', tone: 'blue', checked: true },
+  { kind: 'test', title: 'Looks like a test', short: 'look like tests', hint: 'Not ticked. If you import them, they get the “test” tag, so they don’t count in totals or on the website.', tone: 'yellow', checked: false },
+  { kind: 'invalid', title: 'Can’t be imported', short: 'can’t be imported', hint: 'Invalid email or no speaker that is in the database.', tone: 'red' },
+  { kind: 'exists', title: 'Already in the database', short: 'already there', hint: 'Nothing to do.', tone: 'gray' },
+];
+const IMPORT_CHUNK = 200;
+
+function importItem(item, index, group) {
+  const r = item.row;
+  const name = [r.firstName, r.lastName].filter(Boolean).join(' ') || r.email;
+  const chip = (s) => {
+    if (s.already) return `<span class="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-400 line-through" title="Already requested">${esc(s.name)}</span>`;
+    if (s.full && item.kind !== 'test') return `<span class="rounded bg-amber-50 px-1.5 py-0.5 text-[11px] text-amber-800 ring-1 ring-amber-600/25 ring-inset" title="Full or not open: importing goes over capacity">${esc(s.name)} · full</span>`;
+    return `<span class="rounded bg-slate-50 px-1.5 py-0.5 text-[11px] text-slate-700 ring-1 ring-slate-300/70 ring-inset">${esc(s.name)}</span>`;
+  };
+  const joins =
+    item.investor && item.kind !== 'invalid'
+      ? `<p class="mt-1 text-xs text-slate-500">${item.kind === 'exists' ? 'Investor' : 'Joins'}: <button type="button" data-open-investor="${esc(item.investor.id)}" class="text-brand-600 hover:text-brand-700">${esc(fullName(item.investor))}</button></p>`
+      : item.kind === 'test' && item.would === 'new'
+        ? '<p class="mt-1 text-xs text-slate-500">Would create a new investor.</p>'
+        : '';
+  const body = `<span class="min-w-0 flex-1">
+      <span class="flex flex-wrap items-baseline gap-x-2">
+        <span class="text-sm font-medium">${esc(name)}</span>
+        <span class="text-xs text-slate-500">${esc(r.email || '—')}${r.company ? ` · ${esc(r.company)}` : ''}</span>
+        <span class="ml-auto text-xs whitespace-nowrap text-slate-400" title="Line ${r.line} of the file">${esc(r.submittedAt ? fmtDate(r.submittedAt) : r.date)}</span>
+      </span>
+      ${item.speakers.length ? `<span class="mt-1.5 flex flex-wrap gap-1">${item.speakers.map(chip).join('')}</span>` : ''}
+      ${item.reasons.length ? `<span class="mt-1.5 flex flex-wrap gap-1">${item.reasons.map((x) => pill(x, 'yellow')).join('')}</span>` : ''}
+      ${item.notes.map((n) => `<p class="mt-1 text-xs ${/never saved/.test(n) ? 'font-medium text-rose-700' : 'text-slate-500'}">${esc(n)}</p>`).join('')}
+      ${joins}
+    </span>`;
+  if (!('checked' in group)) return `<li class="flex gap-3 px-3 py-2.5"><span class="w-4 shrink-0"></span>${body}</li>`;
+  return `<li><label class="flex cursor-pointer gap-3 px-3 py-2.5 hover:bg-slate-50">
+      <input type="checkbox" name="import" value="${index}" data-import-kind="${group.kind}" ${group.checked ? 'checked' : ''} class="mt-0.5 ${CHECK}">
+      ${body}
+    </label></li>`;
+}
+
+function openImport() {
+  const pickFile = `<label class="flex cursor-pointer flex-col items-center gap-2 rounded-xl border-2 border-dashed border-slate-300 px-6 py-10 text-center hover:border-brand-500 hover:bg-brand-50/40">
+      ${icon('upload', 'size-8 text-slate-400')}
+      <span class="text-sm font-medium text-slate-900">Choose the CSV file</span>
+      <span class="text-xs text-slate-500">Webflow → Site settings → Forms → the booking form → Download CSV</span>
+      <input type="file" accept=".csv,text/csv" data-import-file class="sr-only">
+    </label>`;
+  const intro = `<p class="text-sm text-slate-600">Each row is checked against the database: what’s already there is skipped, rows that look like tests aren’t ticked. Nothing is written until you press Import.</p>`;
+  const form = openDrawer({ title: 'Import form submissions', subtitle: 'From the Webflow form export (CSV)', body: intro + pickFile, wide: true });
+  form.querySelector('[data-import-file]').addEventListener('change', (e) => {
+    const file = e.target.files?.[0];
+    if (file) readImportFile(file);
+  });
+}
+
+async function readImportFile(file) {
+  let items;
+  try {
+    if (file.size > 5_000_000) throw new Error('The file is larger than 5 MB. Is it the form export?');
+    items = analyzeImport(readFormExport(await file.text()), state.data);
+  } catch (err) {
+    toast(errorText(err), 'error');
+    return;
+  }
+  if (!items.length) return toast('The file has no rows.', 'error');
+
+  const count = (kind) => items.filter((i) => i.kind === kind).length;
+  const summary = `<div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+      <span class="font-medium">${esc(file.name)}</span>
+      <span class="text-slate-500">${items.length} row${items.length === 1 ? '' : 's'}</span>
+      ${IMPORT_GROUPS.filter((g) => count(g.kind)).map((g) => `<span class="flex items-center gap-1.5 text-slate-600">${dot(g.tone)}${count(g.kind)} ${esc(g.short)}</span>`).join('')}
+      <button type="button" data-action="import-csv" class="ml-auto text-sm text-brand-600 hover:text-brand-700">Choose another file</button>
+    </div>`;
+  const options = field(
+    'Status for the imported requests',
+    select('import_status', REQUEST_STATUSES, 'new_request'),
+    'Imported requests take a place like website bookings (unless tagged test). They are imported even if a speaker is full.',
+  );
+  const groups = IMPORT_GROUPS.map((g) => {
+    const list = items.map((item, i) => ({ item, i })).filter(({ item }) => item.kind === g.kind);
+    if (!list.length) return '';
+    const head = `<div class="mb-2 flex items-center gap-2">${dot(g.tone)}<h3 class="text-sm font-semibold">${esc(g.title)}</h3><span class="text-xs text-slate-400">${list.length}</span>
+        ${'checked' in g ? `<span class="ml-auto flex gap-3 text-xs"><button type="button" data-import-pick="${g.kind}:all" class="text-brand-600 hover:text-brand-700">Select all</button><button type="button" data-import-pick="${g.kind}:none" class="text-brand-600 hover:text-brand-700">None</button></span>` : ''}</div>
+      <p class="mb-2 text-xs text-slate-500">${esc(g.hint)}</p>`;
+    const ul = `<ul class="divide-y divide-slate-100 rounded-lg border border-slate-200">${list.map(({ item, i }) => importItem(item, i, g)).join('')}</ul>`;
+    return g.kind === 'exists'
+      ? `<details class="group"><summary class="cursor-pointer list-none">${head.replace('<h3', '<span class="text-slate-400 group-open:rotate-90">›</span><h3')}</summary>${ul}</details>`
+      : `<section>${head}${ul}</section>`;
+  }).join('');
+
+  const importable = items.some((i) => ['new', 'adds', 'test'].includes(i.kind));
+  const nothing = `<div class="rounded-xl border border-emerald-200 bg-emerald-50 px-5 py-6 text-center">
+      <p class="font-medium text-emerald-800">Nothing to import.</p>
+      <p class="mt-1 text-sm text-emerald-700">Everything in this file is already in the database or can’t be imported.</p></div>`;
+  const form = openDrawer({
+    title: 'Import form submissions',
+    subtitle: 'From the Webflow form export (CSV)',
+    body: summary + (importable ? options : nothing) + groups,
+    footerLeft: '<span id="import-count" class="text-sm text-slate-500"></span>',
+    submitLabel: 'Import selected',
+    wide: true,
+    onSubmit: !importable ? null : async (fd) => {
+      const picked = fd.getAll('import').map((i) => items[Number(i)]);
+      if (!picked.length) throw new Error('Nothing selected.');
+      const tests = picked.filter((i) => i.kind === 'test').length;
+      if (tests && !confirm(`${tests} of the selected rows look like tests. Import them with the “test” tag?`)) throw new Error('Import cancelled.');
+      const rows = picked.map(importRow);
+      const results = [];
+      for (let i = 0; i < rows.length; i += IMPORT_CHUNK) {
+        results.push(...(await state.store.importSubmissions(rows.slice(i, i + IMPORT_CHUNK), fd.get('import_status'))));
+      }
+      await reload();
+      const ok = results.filter((r) => r.ok && !r.duplicate);
+      const created = ok.filter((r) => r.created).length;
+      const added = ok.reduce((n, r) => n + (r.added?.length || 0), 0);
+      const dup = results.filter((r) => r.duplicate).length;
+      const failed = results.filter((r) => !r.ok);
+      const parts = [`${ok.length} row${ok.length === 1 ? '' : 's'} imported`, `${created} new investor${created === 1 ? '' : 's'}`, `${added} request${added === 1 ? '' : 's'} added`];
+      if (dup) parts.push(`${dup} already there`);
+      if (failed.length) {
+        const why = failed.map((f) => `${picked.find((p) => p.key === f.key)?.row.email || f.key}: ${f.error}`).join('; ');
+        toast(`${parts.join(', ')}. ${failed.length} failed — ${why}`, 'error');
+      } else {
+        toast(`${parts.join(', ')}.`);
+      }
+    },
+  });
+
+  const updateCount = () => {
+    const n = form.querySelectorAll('input[name="import"]:checked').length;
+    form.querySelector('#import-count').textContent = importable ? `${n} row${n === 1 ? '' : 's'} selected` : '';
+  };
+  form.addEventListener('change', updateCount);
+  form.addEventListener('click', (e) => {
+    const pick = e.target.closest('[data-import-pick]');
+    if (pick) {
+      const [kind, how] = pick.dataset.importPick.split(':');
+      form.querySelectorAll(`input[data-import-kind="${kind}"]`).forEach((el) => (el.checked = how === 'all'));
+      updateCount();
+    }
+    const inv = e.target.closest('[data-open-investor]');
+    if (inv) openInvestor(inv.dataset.openInvestor);
+  });
+  updateCount();
+}
+
+// ---------------------------------------------------------------------------
 // Bulk editing
 // ---------------------------------------------------------------------------
 // keep only ticked rows that are still visible (filters, chips, search)
@@ -2155,6 +2317,7 @@ function bindEvents() {
 
     if (t.closest('[data-action="new-request"]')) return openNewRequest();
     if (t.closest('[data-action="new-investor"]')) return openNewInvestor();
+    if (t.closest('[data-action="import-csv"]')) return openImport();
     if (t.closest('[data-action="download-backup"]')) return downloadBackup();
 
     const addBtn = t.closest('[data-action="add-requests"]');
