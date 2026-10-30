@@ -4,3 +4,4 @@ node_modules
 # built by `npm run build`
 public/eic-team-4k9p/admin.css
 .wrangler
+public/eic-team-4k9p/version.json

@@ -80,6 +80,9 @@ export function createSupabaseStore(client) {
         })
         .then(must),
 
+    // names of the migrations applied to this database (version check in the sidebar)
+    appliedMigrations: () => client.rpc('applied_migrations').then(must),
+
     // Webflow form export rows picked in the import drawer (see import.js → importRow)
     importSubmissions: (rows, status = 'new_request') =>
       client.rpc('panel_import_submissions', { p_rows: rows, p_status: status }).then(must),

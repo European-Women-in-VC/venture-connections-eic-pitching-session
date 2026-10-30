@@ -8,6 +8,7 @@ import { createSupabaseStore } from './store.js';
 import { createDemoStore } from './demo.js';
 import { changeFor, diffSpeakers } from './sync.js';
 import { analyzeImport, importRow, readFormExport } from './import.js';
+import { dbCheck, loadVersion, versionLabel } from './version.js';
 import {
   CAPACITY_STATUSES,
   CLOSED,
@@ -94,6 +95,7 @@ const state = {
   },
   // ticked rows per table (bulk editing)
   selected: { requests: new Set(), investors: new Set(), speakers: new Set() },
+  version: { info: null, check: { ok: true, missing: null } },
 };
 
 // ---------------------------------------------------------------------------
@@ -546,6 +548,7 @@ const sidebarContent = (variant) => `
   <nav class="flex-1 space-y-0.5 overflow-y-auto p-3" data-nav="full"></nav>
   <div class="space-y-3 border-t border-slate-200 p-4">
     <div data-live="full" class="flex items-center gap-2 text-xs text-slate-500"></div>
+    <div data-version="full" class="text-[11px] text-slate-400"></div>
     <div>
       <p class="truncate text-xs font-medium text-slate-700" title="${esc(state.user.email)}">${esc(state.user.email)}</p>
       <div class="mt-2 flex items-center justify-between gap-2">${signOutButton(true)}${variant === 'mobile' ? '' : layoutSwitcher()}</div>
@@ -573,6 +576,7 @@ function renderShell() {
         <nav class="-mb-px flex flex-1 items-stretch gap-1 self-stretch overflow-x-auto scrollbar-thin" data-nav="top"></nav>
         <div class="flex items-center gap-4">
           <span data-live="dot"></span>
+          <span data-version="short" class="hidden text-[11px] text-slate-400 lg:block"></span>
           <span class="hidden max-w-48 truncate text-xs text-slate-500 xl:block" title="${esc(state.user.email)}">${esc(state.user.email)}</span>
           ${layoutSwitcher()}
           ${signOutButton(false)}
@@ -585,6 +589,7 @@ function renderShell() {
         <nav class="flex w-full flex-1 flex-col items-center gap-1 p-2" data-nav="rail"></nav>
         <div class="flex w-full flex-col items-center gap-3 border-t border-slate-200 py-4">
           <span data-live="dot"></span>
+          <span data-version="short" class="text-[10px] text-slate-400"></span>
           ${layoutSwitcher(true)}
           ${signOutButton(false)}
         </div>
@@ -599,6 +604,7 @@ function renderShell() {
       : `<div class="flex h-full">${desktop}<div class="flex min-w-0 flex-1 flex-col">${mobileBar}<main id="main" class="min-w-0 flex-1 overflow-y-auto scrollbar-thin pb-24"></main></div></div><div id="bulk-root"></div>`;
   renderNav();
   renderLive();
+  renderVersion();
 }
 
 function toggleMobileMenu(open) {
@@ -651,6 +657,27 @@ function renderLive() {
     el.title = title;
     el.innerHTML = el.dataset.live === 'full' ? `${dotHtml} ${esc(title)}` : dotHtml;
   });
+}
+
+// app version + database check (sidebar); amber when the database lacks this code's latest migration
+function renderVersion() {
+  const { info, check } = state.version;
+  const env = DEMO ? 'demo' : ENV;
+  const warn = check.ok ? '' : `Database is behind this version: migration “${check.missing}” is not applied.`;
+  const title = [versionLabel(info, env), info?.builtAt ? `built ${fmtDate(info.builtAt)}` : '', warn].filter(Boolean).join('\n');
+  document.querySelectorAll('[data-version]').forEach((el) => {
+    el.title = title;
+    el.classList.toggle('text-amber-700', !check.ok);
+    const text = el.dataset.version === 'full' ? versionLabel(info, env) : info ? `v${info.version}` : 'dev';
+    el.textContent = check.ok ? text : `⚠ ${text}`;
+  });
+}
+
+async function checkVersion() {
+  const [info, applied] = await Promise.all([loadVersion(), state.store.appliedMigrations().catch(() => null)]);
+  state.version = { info, check: dbCheck(info?.migration, applied) };
+  renderVersion();
+  if (!state.version.check.ok) toast(`The database is behind this version of the panel (missing migration “${state.version.check.missing}”). Some actions may fail.`, 'error');
 }
 
 function pageHeader(title, subtitle, actions = '') {
@@ -2518,6 +2545,7 @@ async function enter(session) {
   state.view = VIEWS[view] ? view : 'overview';
   renderShell();
   renderView();
+  checkVersion();
   unsubscribe = state.store.subscribe(scheduleReload, (live) => {
     state.live = live;
     renderLive();
