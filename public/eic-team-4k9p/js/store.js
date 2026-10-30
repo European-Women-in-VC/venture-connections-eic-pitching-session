@@ -80,6 +80,10 @@ export function createSupabaseStore(client) {
         })
         .then(must),
 
+    // Webflow form export rows picked in the import drawer (see import.js → importRow)
+    importSubmissions: (rows, status = 'new_request') =>
+      client.rpc('panel_import_submissions', { p_rows: rows, p_status: status }).then(must),
+
     // speaker cards on the published Webflow page (source of truth for slug / name / company)
     async fetchWebsiteSpeakers(source = 'live') {
       const res = await fetch(`/api/website-speakers?source=${encodeURIComponent(source)}`, { headers: { Accept: 'application/json' } });

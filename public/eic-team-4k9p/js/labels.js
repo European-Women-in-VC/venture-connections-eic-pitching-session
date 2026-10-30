@@ -82,6 +82,7 @@ export const CLOSED = new Set(['declined', 'cancelled', 'expired']);
 export const SOURCES = {
   website: { label: 'Website', title: 'Submitted on the website' },
   panel: { label: 'Team', title: 'Added by the team in this panel' },
+  import: { label: 'Imported', title: 'Imported from the Webflow form export (CSV)' },
 };
 
 export const TEST_TAG = 'test';
