@@ -3,6 +3,14 @@
 Versions follow `package.json` (shown in the panel sidebar). Each release is tagged `vX.Y.Z` on `main`.
 Database migrations a release needs are listed with it; apply them to production before merging.
 
+## 1.2.0 — 2026-10-30
+
+- Team page (owners): members, owner / editor / viewer access per product, disable / enable, history,
+  login links to copy and send (no email needed).
+- Viewers get a read-only panel; the database enforces it (`core.can_read` / `core.can_edit`).
+- Team data in the new `core` schema, shared by future products; `public.admins` is now a view of it.
+- Migration: `20261031090000_team_members_roles.sql` (existing admins become owners).
+
 ## 1.1.0 — 2026-10-30
 
 - Panel shows the app version, commit and database (sidebar); warns when the database lacks the latest
