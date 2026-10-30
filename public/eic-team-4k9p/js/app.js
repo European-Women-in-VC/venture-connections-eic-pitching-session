@@ -42,7 +42,11 @@ const ENVIRONMENTS = {
     key: 'sb_publishable_eslOrlWhbn4eHJc4nE-4-A_20R70VPp',
   },
 };
-const PRODUCTION_HOSTS = ['venture-connections-eic-pitching-se.vercel.app', 'venture-connections-eic-pitching-session-oboilos-projects.vercel.app'];
+const PRODUCTION_HOSTS = [
+  'venture-connections-eic-pitching-session.oleh-boilo.workers.dev', // Cloudflare (production Worker)
+  'venture-connections-eic-pitching-se.vercel.app', // Vercel (until the switch-over is finished)
+  'venture-connections-eic-pitching-session-oboilos-projects.vercel.app',
+];
 const ENV = PRODUCTION_HOSTS.includes(location.hostname) ? 'production' : 'staging';
 const { url: SUPABASE_URL, key: SUPABASE_PUBLISHABLE_KEY } = ENVIRONMENTS[ENV];
 const DEMO = ['localhost', '127.0.0.1'].includes(location.hostname) && new URLSearchParams(location.search).has('demo');

@@ -1,0 +1,23 @@
+// Cloudflare Workers config (Workers Builds: build command `npm run build`).
+//   main branch            → npx wrangler deploy                              (production database)
+//   other branches         → npx wrangler versions upload --var APP_ENV:staging (preview URL, staging database)
+// Secrets (set in the Cloudflare dashboard, never in this file): SUPABASE_SECRET_KEY, STAGING_SUPABASE_SECRET_KEY
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "venture-connections-eic-pitching-session",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  },
+  "observability": { "enabled": true },
+  "vars": {
+    "APP_ENV": "production",
+    "SUPABASE_URL": "https://pxlfskkmakgmfgcwrqay.supabase.co",
+    "STAGING_SUPABASE_URL": "https://ordkpipvkpumdgpgmoxx.supabase.co",
+    "ALLOWED_ORIGINS": "https://ventureconnections-co.webflow.io,https://www.ventureconnections.co,https://ventureconnections.co"
+  }
+}

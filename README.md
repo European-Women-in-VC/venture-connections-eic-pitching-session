@@ -37,6 +37,7 @@ own handler as a raw backup copy (Webflow Forms + notification email) with a `Bo
 | `public/speakers.js` | Front-end: card ⇄ form checkbox sync, max 4, availability badges, sorting, booking submit. |
 | `public/speakers.css` | Styles for checkboxes, badges, form list, toast. |
 | `webflow/embeds.html` | Snippets to paste into Webflow. |
+| `worker/index.js`, `wrangler.jsonc` | Cloudflare Workers entry and config (see below). |
 | `public/eic-team-4k9p/`, `admin/` | Team admin panel (see below). |
 | `dev/` | Local demo page with fake availability (not deployed). |
 | `test/` | Endpoint tests with a mocked Supabase. |
@@ -71,6 +72,23 @@ The site is live, so changes go through a branch first:
 The panel chooses the database by address: only the production domains
 (`venture-connections-eic-pitching-se.vercel.app`, `…-session-oboilos-projects.vercel.app`) use production.
 Vercel env vars: Production → production project, Preview → staging project.
+
+## Hosting on Cloudflare Workers
+
+`wrangler.jsonc` + `worker/index.js`: one Worker serves `public/` as static files and runs the same `/api/*`
+handlers as Vercel (`api/*.js`). Production: https://venture-connections-eic-pitching-session.oleh-boilo.workers.dev
+
+Workers Builds (Cloudflare dashboard → Worker → Settings → Build):
+
+| | Branch | Build command | Deploy command | Database |
+|---|---|---|---|---|
+| Production | `main` | `npm run build` | `npx wrangler deploy` | production |
+| Non-production | all other branches | `npm run build` | `npx wrangler versions upload --var APP_ENV:staging` | staging |
+
+Variables live in `wrangler.jsonc` (`APP_ENV`, `SUPABASE_URL`, `STAGING_SUPABASE_URL`, `ALLOWED_ORIGINS`).
+Secrets are set in the dashboard: `SUPABASE_SECRET_KEY` (production) and `STAGING_SUPABASE_SECRET_KEY` (staging).
+With `APP_ENV=staging` the Worker uses the staging URL and key. `/api/availability` is cached ~10 s
+(Cache API on custom domains, memory on workers.dev). Local run: `npx wrangler dev`.
 
 ## Environment variables (Vercel)
 
