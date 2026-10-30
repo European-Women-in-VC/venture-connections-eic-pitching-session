@@ -29,6 +29,7 @@ own handler as a raw backup copy (Webflow Forms + notification email) with a `Bo
 |---|---|
 | `api/availability.js` | `GET` → `{ availability: { <slug>: { recordId, capacity, used, available, status } } }`. `?fresh=…` bypasses the CDN cache. |
 | `api/website-speakers.js` | `GET ?source=live\|staging` → speaker cards on the Webflow page (for the panel's website comparison). |
+| `api/register-speakers.js` | `POST { speakers: [{ slug }] }` → adds speakers whose card is on the published page. |
 | `api/book.js` | `POST { bookingId, email, firstName, lastName, company, linkedin, speakers[] }` → 200 booked · 409 `unavailable[]` · 422 invalid · 403 wrong origin. |
 | `lib/` | Supabase REST client (secret key, server only) and CORS helper. |
 | `supabase/migrations/` | Database schema: `speakers`, `submissions`, `meeting_requests`, view `speaker_availability`, function `book_meetings`. |
@@ -39,6 +40,22 @@ own handler as a raw backup copy (Webflow Forms + notification email) with a `Bo
 | `public/eic-team-4k9p/`, `admin/` | Team admin panel (see below). |
 | `dev/` | Local demo page with fake availability (not deployed). |
 | `test/` | Endpoint tests with a mocked Supabase. |
+
+## Speaker keys and new cards
+
+The speaker cards are static Webflow elements, so `data-speaker` is typed by hand. `speakers.js` and the server
+apply the same rules (`lib/speaker-keys.js`, copied into `speakers.js` between `<speaker-keys>` markers; a test
+keeps them identical):
+
+- **Clean-up**: lowercase, accents removed, other characters → dashes (`"SageWrite "` → `sagewrite`).
+  Empty → built from the company (or name).
+- **Copied cards**: a card reusing another card's key for a different person gets its own key (from its company).
+  The same person repeated (e.g. desktop + mobile) keeps one key.
+- **New cards**: a card the database doesn't know is registered automatically (`POST /api/register-speakers`,
+  also done before every booking). The server only adds speakers whose card is on the published page
+  (live page for the live domain, webflow.io page for webflow.io), with name/company from the page.
+  Start state: `AUTO_SPEAKER_AVAILABILITY` (default `open`), `AUTO_SPEAKER_CAPACITY` (default 4).
+- `?speakers-debug` on the page outlines cards whose `data-speaker` was fixed.
 
 ## Workflow: branch → preview + staging → production
 

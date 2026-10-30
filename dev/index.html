@@ -61,6 +61,10 @@
       ['quantaflow', 'Daniel Brenner', 'QuantaFlow'],
       ['agrisense', 'Olena Petrenko', 'AgriSense'],
       ['cyberveil', 'Tomasz Nowicki', 'CyberVeil'],
+      // problem cards, like a hand-edited Webflow page:
+      ['orbitra', 'Elena Callegari', 'SageWrite'], // copied from Orbitra, data-speaker not changed
+      ['NordVolt ', 'Mikael Lindqvist', 'NordVolt'], // capitals + space → same speaker as nordvolt
+      ['', 'Blank Person', 'Blank Labs'], // empty data-speaker
     ];
     document.getElementById('cards').innerHTML = '<div class="visually-hidden w-embed"><style>/* embed */</style></div>' + people.map(([slug, name, company]) => `
       <div class="w-dyn-item" role="listitem"><div class="comps_card">

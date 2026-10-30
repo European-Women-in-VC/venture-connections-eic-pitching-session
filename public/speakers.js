@@ -17,6 +17,8 @@
   const endpoint = (path) => (script && script.src ? new URL(path, script.src).href : path);
   const API_URL = (script && script.dataset.api) || endpoint('/api/availability');
   const BOOK_URL = (script && script.dataset.bookApi) || endpoint('/api/book');
+  // new cards the database doesn't know yet are registered automatically (server checks the page)
+  const REGISTER_URL = (script && script.dataset.registerApi) || endpoint('/api/register-speakers');
   const MAX = Number((script && script.dataset.max) || 4);
   const SEP = ';';
   const REFRESH_MS = 15000; // background refresh while the page is visible
@@ -27,6 +29,43 @@
   const SORT = !(script && script.dataset.sort === 'false');
   // after booking, also submit the form to Webflow Forms as a raw backup copy (+ Webflow's notification email)
   const WEBFLOW_BACKUP = !(script && script.dataset.webflowBackup === 'false');
+
+  // Speaker keys — same rules as the server (lib/speaker-keys.js); test/speaker-keys.test.js keeps them identical.
+  // <speaker-keys>
+  function slugify(value) {
+    return String(value == null ? '' : value)
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '') // accents (é → e, İ → i)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+  }
+
+  // cards: [{ slug, name, company }] in page order → keys: [{ key, original, changed, reason }]
+  function assignSpeakerKeys(cards) {
+    const owner = new Map(); // key → fingerprint of the person using it
+    return cards.map(function (card) {
+      const fingerprint = slugify(card.name) + '|' + slugify(card.company);
+      const fromText = slugify(card.company) || slugify(card.name);
+      let key = slugify(card.slug) || fromText || 'speaker';
+      let reason = '';
+      if (!slugify(card.slug)) reason = 'empty data-speaker';
+      else if (key !== card.slug) reason = 'cleaned up';
+
+      if (owner.has(key) && owner.get(key) !== fingerprint) {
+        // same key as a different person (e.g. a copied card that wasn't edited)
+        reason = 'duplicate of another card';
+        let alt = fromText && fromText !== key ? fromText : key + '-' + (slugify(card.name) || 'speaker');
+        let n = 2;
+        const base = alt;
+        while (owner.has(alt) && owner.get(alt) !== fingerprint) alt = base + '-' + n++;
+        key = alt;
+      }
+      owner.set(key, fingerprint);
+      return { key: key, original: card.slug == null ? '' : String(card.slug), changed: key !== card.slug, reason: reason };
+    });
+  }
+  // </speaker-keys>
 
   function init() {
     const list = document.querySelector('[data-speakers-list]');
@@ -59,6 +98,16 @@
       (bookingIdField && bookingIdField.value) ||
       (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + '-' + Math.random().toString(36).slice(2));
     if (bookingIdField) bookingIdField.value = bookingId;
+
+    // ---------- Speaker keys: clean up hand-typed data-speaker values, separate copied cards ----------
+    const keyInfo = assignSpeakerKeys(
+      cardToggles.map((t) => ({ slug: t.dataset.speaker, name: t.dataset.speakerName, company: t.dataset.speakerCompany })),
+    );
+    const keyProblems = [];
+    cardToggles.forEach((t, i) => {
+      if (keyInfo[i].changed) t.dataset.speaker = keyInfo[i].key;
+      if (keyInfo[i].reason) keyProblems.push({ toggle: t, ...keyInfo[i] });
+    });
 
     // ---------- Collect speakers from cards ----------
     const speakers = new Map();
@@ -296,14 +345,41 @@
     });
 
     // ---------- Availability ----------
+    // ?speakers-debug: console report + red outline and a label on cards whose data-speaker needed fixing
     function debugReport() {
       const page = [...speakers.keys()];
-      const air = Object.keys(availability);
+      const db = Object.keys(availability);
       console.group('[speakers] slug check — ' + API_URL);
-      console.log('Matched:', page.filter((s) => air.includes(s)));
-      console.warn('On page, NOT in Airtable (no limit applied):', page.filter((s) => !air.includes(s)));
-      console.warn('In Airtable, NOT on page:', air.filter((s) => !page.includes(s)));
+      console.log('Matched:', page.filter((s) => db.includes(s)));
+      console.warn('On page, NOT in the database yet:', page.filter((s) => !db.includes(s)));
+      console.warn('In the database, NOT on page:', db.filter((s) => !page.includes(s)));
+      keyProblems.forEach((p) => console.warn(`data-speaker "${p.original}" → "${p.key}" (${p.reason})`));
       console.groupEnd();
+      keyProblems.forEach((p) => {
+        const card = p.toggle.closest('.comps_card') || p.toggle;
+        card.style.outline = '3px solid #e11d48';
+        card.style.outlineOffset = '-3px';
+        const note = document.createElement('div');
+        note.style.cssText = 'background:#e11d48;color:#fff;font:600 12px/1.4 system-ui;padding:4px 8px';
+        note.textContent = `data-speaker "${p.original}" → "${p.key}" (${p.reason})`;
+        card.prepend(note);
+      });
+    }
+
+    // cards the database doesn't know yet: ask the server to register them (once per page view)
+    let registerTried = false;
+    async function registerUnknown() {
+      const unknown = [...speakers.values()].filter((s) => !known(s.id));
+      if (registerTried || !unknown.length) return;
+      registerTried = true;
+      const res = await fetch(REGISTER_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ speakers: unknown.map((s) => ({ slug: s.id, name: s.name, company: s.company })) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (DEBUG) console.log('[speakers] registered new cards:', data.added || [], data);
+      if (data.added && data.added.length) await refresh(true);
     }
 
     // fresh check right when a speaker is ticked, throttled per visitor
@@ -507,7 +583,9 @@
     }
 
     render(); // works immediately, without availability
-    refresh().catch(console.warn); // then badges + limits
+    refresh() // then badges + limits
+      .then(registerUnknown)
+      .catch(console.warn);
   }
 
   if (document.readyState === 'loading') {

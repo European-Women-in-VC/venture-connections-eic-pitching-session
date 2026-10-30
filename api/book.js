@@ -12,6 +12,7 @@
 
 import { corsHeaders } from '../lib/cors.js';
 import { isConfigured, supabase, SupabaseError } from '../lib/supabase.js';
+import { registerFromWebsite } from '../lib/register-speakers.js';
 
 const MAX_SPEAKERS = 4;
 const str = (v, max = 256) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
@@ -56,6 +57,13 @@ export async function POST(request) {
   const speakers = Array.isArray(body.speakers) ? body.speakers.map((s) => str(s, 120)).filter(Boolean) : [];
   if (speakers.length === 0 || speakers.length > MAX_SPEAKERS) {
     return reply(422, { ok: false, error: 'invalid_selection' });
+  }
+
+  // a card published moments ago may not be in the database yet: register it first, so the request isn't lost
+  try {
+    await registerFromWebsite(speakers, request.headers.get('origin'));
+  } catch (err) {
+    console.warn('register before booking failed', err);
   }
 
   try {
