@@ -73,6 +73,16 @@ The panel chooses the database by address: only the production domains
 (`venture-connections-eic-pitching-se.vercel.app`, `…-session-oboilos-projects.vercel.app`) use production.
 Vercel env vars: Production → production project, Preview → staging project.
 
+## Versions and checks after a deploy
+
+- Version: `package.json` → `npm run build` writes `public/eic-team-4k9p/version.json` (version, commit, build time,
+  latest migration). The panel sidebar shows it (`v1.1.0 · 2abc9a4 · production DB`) and turns amber when the
+  database hasn't got that migration (`public.applied_migrations()`). Changes per version: `CHANGELOG.md`.
+- Release: bump `version` + `CHANGELOG.md` in the pull request, apply its migrations to production, merge,
+  tag `vX.Y.Z` on `main`.
+- After every deploy: `npm run smoke` (or `npm run smoke -- <base URL>`) checks the panel, `speakers.js`,
+  that the deployed version is the one in `package.json`, and that availability returns speakers.
+
 ## Hosting on Cloudflare Workers
 
 `wrangler.jsonc` + `worker/index.js`: one Worker serves `public/` as static files and runs the same `/api/*`

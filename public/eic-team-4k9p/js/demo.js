@@ -329,6 +329,8 @@ export function createDemoStore() {
       changed();
       return sub.id;
     },
+    // the demo has no migrations: the version check is skipped
+    appliedMigrations: async () => null,
     // same rules as public.panel_import_submissions (simplified)
     async importSubmissions(rows, status = 'new_request') {
       const results = [];
