@@ -162,7 +162,18 @@ function seed() {
     created_at: hoursAgo(3),
   });
 
-  return { speakers, submissions, requests, events, admins: [{ email: DEMO_ADMIN, name: 'Demo admin' }] };
+  const teamMember = (email, name, over = {}) => ({
+    id: uuid(), email, name, isOwner: false, disabledAt: null, disabledBy: null, createdAt: hoursAgo(300), createdBy: 'migration',
+    hasLogin: true, lastSignInAt: hoursAgo(5), roles: {}, events: [{ action: 'created', actor: 'migration', details: {}, at: hoursAgo(300) }], ...over,
+  });
+  const team = [
+    teamMember(DEMO_ADMIN, 'Demo admin', { isOwner: true, lastSignInAt: hoursAgo(0.1) }),
+    teamMember('editor@example.org', 'Eva Editor', { roles: { 'eic-bookings': 'editor' } }),
+    teamMember('viewer@example.org', 'Victor Viewer', { roles: { 'eic-bookings': 'viewer' }, hasLogin: false, lastSignInAt: null }),
+    teamMember('former@example.org', 'Fiona Former', { roles: { 'eic-bookings': 'editor' }, disabledAt: hoursAgo(48), disabledBy: DEMO_ADMIN }),
+  ];
+
+  return { speakers, submissions, requests, events, team, admins: [{ email: DEMO_ADMIN, name: 'Demo admin' }] };
 }
 
 export function createDemoStore() {
@@ -328,6 +339,45 @@ export function createDemoStore() {
       if (inv.speaker_ids?.length) await addRequests(sub.id, inv.speaker_ids, inv.status);
       changed();
       return sub.id;
+    },
+    // team: same rules as the database functions (simplified)
+    async teamList() {
+      return clone({ products: [{ slug: 'eic-bookings', name: 'EIC Pitching Session bookings' }], members: db.team });
+    },
+    async teamSaveMember(m) {
+      const email = String(m.email || '').trim().toLowerCase();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error('invalid_email');
+      let row = db.team.find((x) => x.email === email);
+      const created = !row;
+      if (created) {
+        row = { id: uuid(), email, disabledAt: null, disabledBy: null, createdAt: now(), createdBy: DEMO_ADMIN, hasLogin: false, lastSignInAt: null, roles: {}, events: [] };
+        db.team.push(row);
+      }
+      const before = clone(row);
+      Object.assign(row, { name: m.name || null, isOwner: !!m.isOwner });
+      for (const [slug, role] of Object.entries(m.roles || {})) {
+        if (role) row.roles[slug] = role;
+        else delete row.roles[slug];
+      }
+      if (!db.team.some((x) => x.isOwner && !x.disabledAt)) {
+        Object.assign(row, before);
+        throw new Error('last_owner');
+      }
+      row.events.unshift({ action: created ? 'created' : 'updated', actor: DEMO_ADMIN, details: { isOwner: row.isOwner, roles: m.roles }, at: now() });
+      return row.id;
+    },
+    async teamSetDisabled(id, disabled) {
+      const row = db.team.find((x) => x.id === id);
+      if (row.email === DEMO_ADMIN && disabled) throw new Error('cannot_disable_self');
+      row.disabledAt = disabled ? now() : null;
+      row.disabledBy = disabled ? DEMO_ADMIN : null;
+      row.events.unshift({ action: disabled ? 'disabled' : 'enabled', actor: DEMO_ADMIN, details: {}, at: now() });
+    },
+    async teamLink(email) {
+      const row = db.team.find((x) => x.email === email);
+      const kind = row.hasLogin ? 'recovery' : 'invite';
+      row.events.unshift({ action: 'login_link', actor: DEMO_ADMIN, details: { kind }, at: now() });
+      return { kind, link: `https://demo.supabase.co/auth/v1/verify?type=${kind}&token=demo-${uuid().slice(0, 8)}` };
     },
     // the demo has no migrations: the version check is skipped
     appliedMigrations: async () => null,

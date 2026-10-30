@@ -9,6 +9,7 @@ import { createDemoStore } from './demo.js';
 import { changeFor, diffSpeakers } from './sync.js';
 import { analyzeImport, importRow, readFormExport } from './import.js';
 import { dbCheck, loadVersion, versionLabel } from './version.js';
+import { ACCESS, MEMBER_STATUSES, PRODUCT, canEditProduct, memberAccess, memberStatus } from './team.js';
 import {
   CAPACITY_STATUSES,
   CLOSED,
@@ -96,6 +97,9 @@ const state = {
   // ticked rows per table (bulk editing)
   selected: { requests: new Set(), investors: new Set(), speakers: new Set() },
   version: { info: null, check: { ok: true, missing: null } },
+  access: null, // public.my_access(): { email, name, isOwner, products: [{ slug, name, role }] }
+  canEdit: false, // editor or owner of this panel's product; viewers get a read-only panel
+  team: null, // public.team_list() (Team page, owners only)
 };
 
 // ---------------------------------------------------------------------------
@@ -176,6 +180,7 @@ const ICONS = {
   layoutSide: '<rect x="3.75" y="4.5" width="16.5" height="15" rx="2.25" /><path stroke-linecap="round" d="M9.75 4.5v15" />',
   layoutRail: '<rect x="3.75" y="4.5" width="16.5" height="15" rx="2.25" /><path stroke-linecap="round" d="M7.5 4.5v15" />',
   layoutTop: '<rect x="3.75" y="4.5" width="16.5" height="15" rx="2.25" /><path stroke-linecap="round" d="M3.75 9h16.5" />',
+  team: '<path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z" />',
   sync: '<path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />',
 };
 const icon = (name, cls = 'size-5') =>
@@ -477,8 +482,8 @@ function showSetPassword(kind) {
 function showNoAccess(email) {
   authCard(
     'No access yet',
-    `You’re signed in as <strong class="text-slate-700">${esc(email)}</strong>, but this email isn’t on the team list.`,
-    `<p class="text-sm text-slate-600">Ask an admin to add your email to the <code class="rounded bg-slate-100 px-1">admins</code> table in Supabase, then reload this page.</p>
+    `You’re signed in as <strong class="text-slate-700">${esc(email)}</strong>, but this email has no access to the EIC bookings.`,
+    `<p class="text-sm text-slate-600">Ask an owner to add you on the panel’s Team page (or to enable you again), then reload this page.</p>
      <button id="sign-out" class="${BTN_SECONDARY} mt-5 w-full">Sign out</button>`,
   );
   document.getElementById('sign-out').addEventListener('click', () => client.auth.signOut());
@@ -492,7 +497,10 @@ const NAV = [
   { id: 'requests', label: 'Meeting requests' },
   { id: 'investors', label: 'Investors' },
   { id: 'speakers', label: 'Speakers' },
+  { id: 'team', label: 'Team', ownerOnly: true },
 ];
+const navItems = () => NAV.filter((n) => !n.ownerOnly || state.access?.isOwner);
+const viewAllowed = (view) => Boolean(VIEWS[view]) && navItems().some((n) => n.id === view);
 
 // Menu layouts on desktop (saved per browser): 'side' = full sidebar, 'rail' = icon bar, 'top' = bar above
 // the content. Below the md breakpoint the menu always slides in from the left (☰ button).
@@ -551,6 +559,7 @@ const sidebarContent = (variant) => `
     <div data-version="full" class="text-[11px] text-slate-400"></div>
     <div>
       <p class="truncate text-xs font-medium text-slate-700" title="${esc(state.user.email)}">${esc(state.user.email)}</p>
+      ${state.canEdit ? '' : '<p class="mt-0.5 text-[11px] font-medium text-amber-700" title="You can look at everything but not change it">Viewer · read only</p>'}
       <div class="mt-2 flex items-center justify-between gap-2">${signOutButton(true)}${variant === 'mobile' ? '' : layoutSwitcher()}</div>
     </div>
   </div>`;
@@ -641,10 +650,10 @@ function renderNav() {
 
   document.querySelectorAll('[data-nav]').forEach((nav) => {
     const draw = variants[nav.dataset.nav];
-    nav.innerHTML = NAV.map((n) => draw(n, state.view === n.id, counts[n.id])).join('');
+    nav.innerHTML = navItems().map((n) => draw(n, state.view === n.id, counts[n.id])).join('');
   });
   document.querySelectorAll('[data-current-view]').forEach((el) => {
-    el.textContent = NAV.find((n) => n.id === state.view)?.label || '';
+    el.textContent = navItems().find((n) => n.id === state.view)?.label || '';
   });
 }
 
@@ -1205,6 +1214,41 @@ function renderSpeakersBody() {
 // ---------------------------------------------------------------------------
 // Drawer (side panel)
 // ---------------------------------------------------------------------------
+// Viewers (read only): every control that changes data is hidden or disabled. One list, applied to
+// everything that gets rendered (see watchReadOnly). The database refuses their edits anyway.
+const EDIT_CONTROLS = [
+  '[data-action$="-status"]',
+  '[data-action="speaker-capacity"]',
+  '[data-action^="new-"]',
+  '[data-action="import-csv"]',
+  '[data-action="add-requests"]',
+  '[data-action^="archive-"]',
+  '[data-action^="restore-"]',
+  '[data-sync-source]',
+  '[data-bulk]:not([data-bulk="export"]):not([data-bulk="clear"])',
+  '[data-bulk-tag-input]',
+  '[data-bulk-capacity]',
+].join(', ');
+
+function lockEditing(root) {
+  const found = [...(root.matches?.(EDIT_CONTROLS) ? [root] : []), ...(root.querySelectorAll?.(EDIT_CONTROLS) || [])];
+  for (const el of found) {
+    // inline fields stay visible (they show the value) but locked; buttons and bulk edits disappear
+    if (el.matches('select, input, textarea') && !el.closest('#bulk-root')) el.disabled = true;
+    else el.hidden = true;
+  }
+}
+
+let readOnlyObserver = null;
+function watchReadOnly() {
+  readOnlyObserver?.disconnect();
+  readOnlyObserver = null;
+  if (state.canEdit) return;
+  lockEditing(document.body);
+  readOnlyObserver = new MutationObserver((changes) => changes.forEach((c) => c.addedNodes.forEach((n) => n.nodeType === 1 && lockEditing(n))));
+  readOnlyObserver.observe(document.body, { childList: true, subtree: true });
+}
+
 let drawerKeyHandler = null;
 
 function closeDrawer() {
@@ -1214,6 +1258,7 @@ function closeDrawer() {
 }
 
 function openDrawer({ title, subtitle = '', body, footerLeft = '', submitLabel = 'Save changes', onSubmit, wide = false }) {
+  if (!state.canEdit) onSubmit = null; // viewers: read only
   drawerRoot.innerHTML = `
     <div class="fixed inset-0 z-40" role="dialog" aria-modal="true">
       <div class="absolute inset-0 bg-slate-900/30 backdrop-blur-[1px]" data-close></div>
@@ -1229,7 +1274,7 @@ function openDrawer({ title, subtitle = '', body, footerLeft = '', submitLabel =
         <div class="flex items-center justify-between gap-3 border-t border-slate-200 px-6 py-4">
           <div>${footerLeft}</div>
           <div class="flex gap-2">
-            <button type="button" data-close class="${BTN_SECONDARY}">Cancel</button>
+            <button type="button" data-close class="${BTN_SECONDARY}">${onSubmit ? 'Cancel' : 'Close'}</button>
             ${onSubmit ? `<button class="${BTN_PRIMARY}">${esc(submitLabel)}</button>` : ''}
           </div>
         </div>
@@ -1237,6 +1282,7 @@ function openDrawer({ title, subtitle = '', body, footerLeft = '', submitLabel =
     </div>`;
 
   const form = document.getElementById('drawer-form');
+  if (!state.canEdit) form.querySelectorAll('input, select, textarea').forEach((el) => (el.disabled = true));
   drawerRoot.querySelectorAll('[data-close]').forEach((el) => el.addEventListener('click', closeDrawer));
   drawerKeyHandler = (e) => e.key === 'Escape' && closeDrawer();
   document.addEventListener('keydown', drawerKeyHandler);
@@ -1826,6 +1872,150 @@ async function openSync(source = 'live') {
 }
 
 // ---------------------------------------------------------------------------
+// Team (owners only): who can sign in, their access, login links
+// ---------------------------------------------------------------------------
+const accessPill = (access) => `<span title="${esc(ACCESS[access].hint)}">${pill(ACCESS[access].label, ACCESS[access].tone)}</span>`;
+const EVENT_LABELS = { created: 'Added', updated: 'Access changed', disabled: 'Disabled', enabled: 'Enabled again', login_link: 'Login link created' };
+
+async function loadTeam() {
+  state.team = await state.store.teamList();
+  return state.team;
+}
+
+function renderTeam() {
+  const main = document.getElementById('main');
+  main.innerHTML =
+    pageHeader(
+      'Team',
+      'Who can sign in to this panel and what they can do. Owners manage this page.',
+      `<button data-action="team-add" class="${BTN_PRIMARY}">${icon('plus', 'size-4')} Add member</button>`,
+    ) + `<div class="space-y-4 p-6"><div id="view-body"><p class="py-10 text-center text-sm text-slate-500">Loading the team…</p></div></div>`;
+  loadTeam().then(renderTeamBody, (err) => {
+    const body = document.getElementById('view-body');
+    if (body) body.innerHTML = `<p class="rounded-lg bg-rose-50 px-4 py-3 text-sm text-rose-700">${esc(errorText(err))}</p>`;
+  });
+}
+
+function renderTeamBody() {
+  const body = document.getElementById('view-body');
+  if (!body || state.view !== 'team' || !state.team) return;
+  const rows = state.team.members
+    .map((m) => {
+      const status = memberStatus(m);
+      return `<tr data-open="member" data-id="${esc(m.id)}" class="cursor-pointer bg-white hover:bg-slate-50 ${status === 'disabled' ? 'opacity-60' : ''}">
+        <td class="px-4 py-3"><div class="font-medium">${esc(m.name || m.email)}</div>${m.name ? `<div class="text-xs text-slate-500">${esc(m.email)}</div>` : ''}</td>
+        <td class="px-4 py-3">${accessPill(memberAccess(m, PRODUCT))}</td>
+        <td class="px-4 py-3">${pill(MEMBER_STATUSES[status].label, MEMBER_STATUSES[status].tone)}</td>
+        <td class="px-4 py-3 text-sm text-slate-500" title="${esc(fmtDate(m.lastSignInAt))}">${m.lastSignInAt ? esc(timeAgo(m.lastSignInAt)) : '—'}</td>
+      </tr>`;
+    })
+    .join('');
+  body.innerHTML = tableWrap(
+    ['Member', 'EIC bookings', 'Status', 'Last sign-in'].map((h) => `<th class="px-4 py-2.5 text-left font-medium">${h}</th>`).join(''),
+    rows || emptyRow(4, 'No members yet.'),
+  );
+}
+
+function memberHistory(m) {
+  if (!m.events?.length) return '<p class="text-sm text-slate-500">No changes yet.</p>';
+  return `<ol class="space-y-2">${m.events
+    .map((e) => {
+      const extra = e.action === 'login_link' ? ` (${e.details?.kind === 'invite' ? 'invitation' : 'set password'})` : '';
+      return `<li class="flex flex-wrap items-baseline gap-x-2 text-sm"><span class="font-medium">${esc(EVENT_LABELS[e.action] || e.action)}${esc(extra)}</span>
+        <span class="text-xs text-slate-500">${e.actor ? `by ${esc(e.actor)} · ` : ''}${esc(fmtDate(e.at))}</span></li>`;
+    })
+    .join('')}</ol>`;
+}
+
+function openMember(id) {
+  const m = id ? state.team.members.find((x) => x.id === id) : null;
+  if (id && !m) return;
+  const role = m?.roles?.[PRODUCT] || '';
+  const isSelf = m && m.email === state.user.email?.toLowerCase();
+  const products = state.team.products
+    .map((p) =>
+      field(
+        p.name,
+        select(`role:${p.slug}`, [{ value: '', label: 'No access' }, { value: 'viewer', label: 'Viewer — can read' }, { value: 'editor', label: 'Editor — can read and edit' }], m?.roles?.[p.slug] || ''),
+      ),
+    )
+    .join('');
+  const status = m ? memberStatus(m) : null;
+  const footerLeft = m
+    ? `<div class="flex flex-wrap gap-2">
+        ${status !== 'disabled' ? `<button type="button" data-action="team-link" data-email="${esc(m.email)}" class="${BTN_SECONDARY}">Login link</button>` : ''}
+        ${status === 'disabled'
+          ? `<button type="button" data-action="team-enable" data-id="${esc(m.id)}" class="${BTN_SECONDARY}">Enable</button>`
+          : isSelf ? '' : `<button type="button" data-action="team-disable" data-id="${esc(m.id)}" class="${BTN_DANGER}">Disable</button>`}
+      </div>`
+    : '';
+  openDrawer({
+    title: m ? esc(m.name || m.email) : 'Add member',
+    subtitle: m ? esc(m.email) : 'They get a login link to copy and send — no email is sent.',
+    body: `
+      ${m && status === 'disabled' ? `<p class="rounded-lg bg-slate-100 px-3 py-2 text-sm text-slate-600">Disabled ${esc(fmtDate(m.disabledAt))}${m.disabledBy ? ` by ${esc(m.disabledBy)}` : ''}. They can’t see anything until enabled again.</p>` : ''}
+      ${m ? '' : field('Email', input('email', '', 'type="email" required autocomplete="off"'))}
+      ${field('Name', input('name', m?.name || '', 'autocomplete="off"'))}
+      <label class="flex items-start gap-3 rounded-lg border border-slate-200 px-3 py-2.5">
+        <input type="checkbox" name="isOwner" ${m?.isOwner ? 'checked' : ''} ${isSelf && m?.isOwner ? 'data-self-owner' : ''} class="mt-0.5 ${CHECK}">
+        <span><span class="block text-sm font-medium">Owner</span><span class="block text-xs text-slate-500">Manages this Team page. Can read and edit every product, whatever is chosen below.</span></span>
+      </label>
+      ${section('Access per product', `<div class="space-y-3">${products}</div>`)}
+      ${m ? section('History', memberHistory(m)) : ''}`,
+    footerLeft,
+    submitLabel: m ? 'Save changes' : 'Add and create login link',
+    onSubmit: async (fd) => {
+      if (isSelf && m.isOwner && !fd.get('isOwner') && !confirm('Remove your own owner rights? You won’t see this Team page any more.')) throw new Error('Cancelled.');
+      const roles = Object.fromEntries(state.team.products.map((p) => [p.slug, fd.get(`role:${p.slug}`) || null]));
+      const email = m ? m.email : String(fd.get('email')).trim().toLowerCase();
+      await state.store.teamSaveMember({ email, name: nullIfEmpty(fd.get('name')), isOwner: !!fd.get('isOwner'), roles });
+      await loadTeam();
+      renderTeamBody();
+      if (!m) setTimeout(() => showLoginLink(email), 0);
+      else toast('Saved.');
+    },
+  });
+  if (role === '' && !m) document.querySelector('[name="role:' + PRODUCT + '"]').value = 'editor';
+}
+
+async function showLoginLink(email) {
+  let result;
+  try {
+    result = await state.store.teamLink(email, PANEL_URL);
+  } catch (err) {
+    return toast(errorText(err), 'error');
+  }
+  await loadTeam().then(renderTeamBody, () => {});
+  const what = result.kind === 'invite' ? 'They open it and choose a password.' : 'They already have a login: the link lets them set a new password.';
+  openDrawer({
+    title: 'Login link',
+    subtitle: esc(email),
+    body: `
+      <p class="text-sm text-slate-600">Send this link to <strong>${esc(email)}</strong> yourself (chat or email). ${what}
+        It works once and expires after a while — if it’s too late, create a new one.</p>
+      <div class="flex gap-2">
+        <input readonly value="${esc(result.link)}" data-login-link class="${INPUT} font-mono text-xs" aria-label="Login link">
+        <button type="button" data-action="copy-link" class="${BTN_PRIMARY} shrink-0">Copy</button>
+      </div>
+      <p class="text-xs text-slate-500">Anyone with this link can sign in as ${esc(email)} until it’s used, so only send it to them.</p>`,
+  });
+}
+
+async function setMemberDisabled(id, disabled) {
+  const m = state.team.members.find((x) => x.id === id);
+  if (disabled && !confirm(`Disable ${m.name || m.email}? They lose access right away. You can enable them again later.`)) return;
+  try {
+    await state.store.teamSetDisabled(id, disabled);
+    await loadTeam();
+    renderTeamBody();
+    openMember(id);
+    toast(disabled ? 'Disabled — no access any more.' : 'Enabled again.');
+  } catch (err) {
+    toast(errorText(err), 'error');
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Import the Webflow form export (CSV): pick what's missing, skip what exists, leave tests out
 // ---------------------------------------------------------------------------
 const IMPORT_GROUPS = [
@@ -2223,7 +2413,7 @@ function exportView(view, selectedOnly = false) {
 // ---------------------------------------------------------------------------
 // Rendering + events
 // ---------------------------------------------------------------------------
-const VIEWS = { overview: renderOverview, requests: renderRequests, investors: renderInvestors, speakers: renderSpeakers };
+const VIEWS = { overview: renderOverview, requests: renderRequests, investors: renderInvestors, speakers: renderSpeakers, team: renderTeam };
 const BODIES = { requests: renderRequestsBody, investors: renderInvestorsBody, speakers: renderSpeakersBody };
 
 function renderView() {
@@ -2274,7 +2464,7 @@ const scheduleReload = () => {
 function bindEvents() {
   window.addEventListener('hashchange', () => {
     const view = location.hash.slice(1);
-    state.view = VIEWS[view] ? view : 'overview';
+    state.view = viewAllowed(view) ? view : 'overview';
     toggleMobileMenu(false);
     renderView();
   });
@@ -2345,6 +2535,17 @@ function bindEvents() {
     if (t.closest('[data-action="new-request"]')) return openNewRequest();
     if (t.closest('[data-action="new-investor"]')) return openNewInvestor();
     if (t.closest('[data-action="import-csv"]')) return openImport();
+    if (t.closest('[data-action="team-add"]')) return openMember(null);
+    const teamLink = t.closest('[data-action="team-link"]');
+    if (teamLink) return showLoginLink(teamLink.dataset.email);
+    const teamToggle = t.closest('[data-action="team-disable"], [data-action="team-enable"]');
+    if (teamToggle) return setMemberDisabled(teamToggle.dataset.id, teamToggle.dataset.action === 'team-disable');
+    if (t.closest('[data-action="copy-link"]')) {
+      const link = document.querySelector('[data-login-link]');
+      link.select();
+      await navigator.clipboard.writeText(link.value).then(() => toast('Link copied.'), () => toast('Select the link and copy it.', 'error'));
+      return;
+    }
     if (t.closest('[data-action="download-backup"]')) return downloadBackup();
 
     const addBtn = t.closest('[data-action="add-requests"]');
@@ -2436,7 +2637,7 @@ function bindEvents() {
     // row / link → side panel (but not when clicking a control inside the row)
     const open = t.closest('[data-open]');
     if (open && !t.closest('[data-stop], select, input, a')) {
-      const openers = { request: openRequest, investor: openInvestor, speaker: openSpeaker };
+      const openers = { request: openRequest, investor: openInvestor, speaker: openSpeaker, member: openMember };
       return openers[open.dataset.open](open.dataset.id);
     }
   });
@@ -2532,17 +2733,24 @@ let entered = false;
 async function enter(session) {
   if (DEMO) {
     state.user = { email: 'demo@localhost' };
+    // ?demo&viewer: try the read-only panel
+    const viewer = new URLSearchParams(location.search).has('viewer');
+    state.access = { email: state.user.email, isOwner: !viewer, products: [{ slug: PRODUCT, role: viewer ? 'viewer' : 'editor' }] };
   } else {
     state.user = session.user;
-    const { data: isAdmin, error } = await client.rpc('is_admin');
-    if (error || !isAdmin) return showNoAccess(session.user.email);
+    const { data: access, error } = await client.rpc('my_access');
+    if (error || !access?.products?.some((p) => p.slug === PRODUCT)) return showNoAccess(session.user.email);
+    state.access = access;
   }
+  state.canEdit = canEditProduct(state.access, PRODUCT);
+  document.documentElement.toggleAttribute('data-readonly', !state.canEdit);
+  watchReadOnly();
   if (entered) return;
   entered = true;
 
   state.store = DEMO ? createDemoStore() : createSupabaseStore(client);
   const view = location.hash.slice(1);
-  state.view = VIEWS[view] ? view : 'overview';
+  state.view = viewAllowed(view) ? view : 'overview';
   renderShell();
   renderView();
   checkVersion();

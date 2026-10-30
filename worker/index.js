@@ -8,12 +8,14 @@
 import * as availability from '../api/availability.js';
 import * as book from '../api/book.js';
 import * as registerSpeakers from '../api/register-speakers.js';
+import * as teamLink from '../api/team-link.js';
 import * as websiteSpeakers from '../api/website-speakers.js';
 
 const ROUTES = {
   '/api/availability': availability,
   '/api/book': book,
   '/api/register-speakers': registerSpeakers,
+  '/api/team-link': teamLink,
   '/api/website-speakers': websiteSpeakers,
 };
 

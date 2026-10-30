@@ -121,8 +121,8 @@ A meeting request takes one of the speaker's places while its status is `new_req
 Team panel for the bookings: overview, meeting requests (status inline), investors, speakers
 (capacity / availability inline), side panel per row, CSV export, live updates.
 
-- Login: Supabase Auth, email + password, invite only. Access: emails in `public.admins`
-  (row-level security, migration `20261020090000_admin_access.sql`).
+- Login: Supabase Auth, email + password, invite only. Access: the Team page (below), stored in the
+  `core` schema (migration `20261031090000_team_members_roles.sql`).
 - Code: `public/eic-team-4k9p/` (plain JS modules, supabase-js from jsDelivr). Styles: Tailwind v4,
   source `admin/admin.css` → built to `public/eic-team-4k9p/admin.css` by `npm run build` (Vercel runs it).
 - Local demo with fake data: `npm run build && python3 -m http.server 4322 --directory public`,
@@ -172,9 +172,26 @@ date, source `import` ("Imported" badge) and a history entry. The import key (Bo
 for older rows) is stored, so importing the same file again adds nothing. Imported requests take places like
 website bookings, even when a speaker is full (the panel shows a warning on those speakers).
 
-Add a team member: Supabase → Authentication → Users → *Invite user*, and add the same email
-(lowercase) to the `admins` table. Supabase → Authentication → URL Configuration must have
-`https://venture-connections-eic-pitching-se.vercel.app/eic-team-4k9p/` as Site URL / redirect URL.
+**Team** (owners only): add members, set their access, disable / enable, create login links.
+
+| Access | Can |
+|---|---|
+| Owner (member flag) | Everything in every product, plus the Team page |
+| Editor (per product) | Read and edit that product |
+| Viewer (per product) | Read only: the panel hides or locks every edit control |
+| No access / disabled | Nothing (a disabled member's history is kept) |
+
+- Tables: `core.members`, `core.products`, `core.memberships`, `core.member_events` (who changed what).
+  `core` isn't exposed to the Data API; the panel uses `public.my_access()`, `team_list()`,
+  `team_save_member()`, `team_set_disabled()`, which check the caller. Rules: `core.can_read(product)`,
+  `core.can_edit(product)`; `public.is_admin()` = can edit `eic-bookings`. At least one active owner always remains.
+- Login links: `POST /api/team-link` (owner's session) creates an invite link (new login) or a set-password
+  link (existing login) with the Auth admin API. **No email is sent**: the owner copies the link and sends it.
+- Supabase → Authentication → URL Configuration must list each panel address as a redirect URL, e.g.
+  `https://venture-connections-eic-pitching-session.oleh-boilo.workers.dev/eic-team-4k9p/`,
+  `https://venture-connections-eic-pitching-se.vercel.app/eic-team-4k9p/` (and the preview pattern on staging),
+  otherwise links go to the Site URL.
+- Try the read-only panel locally: `http://localhost:4322/eic-team-4k9p/?demo&viewer`.
 
 ## Webflow
 

@@ -80,6 +80,24 @@ export function createSupabaseStore(client) {
         })
         .then(must),
 
+    // team (owners only; the database functions check the caller)
+    teamList: () => client.rpc('team_list').then(must),
+    teamSaveMember: (m) =>
+      client.rpc('team_save_member', { p_email: m.email, p_name: m.name, p_is_owner: m.isOwner, p_roles: m.roles }).then(must),
+    teamSetDisabled: (id, disabled) => client.rpc('team_set_disabled', { p_member_id: id, p_disabled: disabled }).then(must),
+    // login link to copy and send (server side: needs the secret key). redirectTo: this panel's address
+    async teamLink(email, redirectTo) {
+      const { data } = await client.auth.getSession();
+      const res = await fetch('/api/team-link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${data.session?.access_token || ''}` },
+        body: JSON.stringify({ email, redirectTo }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `Login link failed (${res.status})`);
+      return body;
+    },
+
     // names of the migrations applied to this database (version check in the sidebar)
     appliedMigrations: () => client.rpc('applied_migrations').then(must),
 
