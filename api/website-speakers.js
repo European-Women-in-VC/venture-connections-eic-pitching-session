@@ -8,11 +8,12 @@
 
 import { assignSpeakerKeys } from '../lib/speaker-keys.js';
 
-export const PAGES = {
+// read on use (on Cloudflare the env is filled per request, after this module is loaded)
+export const pages = () => ({
   live: process.env.WEBSITE_URL_LIVE || 'https://www.ventureconnections.co/eic-women-leadership-programme',
   staging:
     process.env.WEBSITE_URL_STAGING || 'https://ventureconnections-co.webflow.io/eic-women-leadership-programme',
-};
+});
 
 const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', '#39': "'" };
 
@@ -69,7 +70,7 @@ export async function readWebsiteSpeakers(source, maxAgeMs = 0) {
   const cached = pageCache.get(source);
   if (maxAgeMs > 0 && cached && Date.now() - cached.at < maxAgeMs) return cached.result;
 
-  const url = PAGES[source];
+  const url = pages()[source];
   // cache-buster: get the page as published now, not an older CDN copy
   const res = await fetch(`${url}${url.includes('?') ? '&' : '?'}_=${Date.now()}`, {
     headers: { Accept: 'text/html', 'User-Agent': 'EIC-bookings-sync/1.0' },
@@ -89,6 +90,6 @@ export async function GET(request) {
     return Response.json(await readWebsiteSpeakers(source), { headers: { 'Cache-Control': 'public, s-maxage=15' } });
   } catch (err) {
     console.error(err);
-    return Response.json({ error: 'Could not read the website page', source, url: PAGES[source] }, { status: 502 });
+    return Response.json({ error: 'Could not read the website page', source, url: pages()[source] }, { status: 502 });
   }
 }
