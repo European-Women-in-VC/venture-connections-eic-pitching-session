@@ -6,7 +6,9 @@
 //   <label data-speaker-toggle data-speaker="{{Slug}}" data-speaker-name="…" data-speaker-company="…">
 // Only the fixed pages below can be fetched (no user-supplied URLs).
 
-const PAGES = {
+import { assignSpeakerKeys } from '../lib/speaker-keys.js';
+
+export const PAGES = {
   live: process.env.WEBSITE_URL_LIVE || 'https://www.ventureconnections.co/eic-women-leadership-programme',
   staging:
     process.env.WEBSITE_URL_STAGING || 'https://ventureconnections-co.webflow.io/eic-women-leadership-programme',
@@ -34,53 +36,59 @@ function attributes(tag) {
 
 const clean = (v) => String(v ?? '').normalize('NFC').replace(/\s+/g, ' ').trim();
 
+// Cards in page order with clean, unique keys (same rules as the page script, lib/speaker-keys.js).
+// A card repeated for the same person (e.g. desktop + mobile) is listed once.
 export function parseSpeakers(html) {
+  const tags = html.match(/<[a-z][^>]*\bdata-speaker-toggle\b[^>]*>/gi) || [];
+  const cards = tags.map((tag) => {
+    const a = attributes(tag);
+    return { slug: clean(a['data-speaker']), name: clean(a['data-speaker-name']), company: clean(a['data-speaker-company']) };
+  });
+  const keys = assignSpeakerKeys(cards);
+
   const speakers = [];
   const warnings = [];
-  const seen = new Map();
-  const tags = html.match(/<[a-z][^>]*\bdata-speaker-toggle\b[^>]*>/gi) || [];
-
-  for (const tag of tags) {
-    const a = attributes(tag);
-    const speaker = {
-      slug: clean(a['data-speaker']).toLowerCase(),
-      name: clean(a['data-speaker-name']),
-      company: clean(a['data-speaker-company']),
-    };
-    if (!speaker.slug) {
-      warnings.push(`A card without a slug (${speaker.name || speaker.company || 'no name'}) was skipped.`);
-      continue;
-    }
-    const earlier = seen.get(speaker.slug);
-    if (earlier) {
-      if (earlier.name !== speaker.name || earlier.company !== speaker.company) {
-        warnings.push(`Two cards use the slug “${speaker.slug}” with different names; the first one is used.`);
-      }
-      continue;
-    }
-    seen.set(speaker.slug, speaker);
-    speakers.push(speaker);
-  }
+  const seen = new Set();
+  cards.forEach((card, i) => {
+    const { key, reason } = keys[i];
+    if (seen.has(key)) return;
+    seen.add(key);
+    speakers.push({ slug: key, name: card.name, company: card.company });
+    const who = card.name || card.company || 'a card';
+    if (reason === 'empty data-speaker') warnings.push(`${who}: the card has no data-speaker; using “${key}” (from the company name).`);
+    else if (reason === 'duplicate of another card') warnings.push(`${who}: data-speaker “${card.slug}” is already used by another card (copied card?); using “${key}”.`);
+    else if (reason === 'cleaned up') warnings.push(`${who}: data-speaker “${card.slug}” was cleaned up to “${key}”.`);
+  });
   return { speakers, warnings };
+}
+
+// Read one of the fixed pages. maxAgeMs > 0 reuses a recent copy (used by auto-registration,
+// which can be called by every visitor); the panel's comparison always reads it fresh.
+const pageCache = new Map(); // source → { at, result }
+export async function readWebsiteSpeakers(source, maxAgeMs = 0) {
+  const cached = pageCache.get(source);
+  if (maxAgeMs > 0 && cached && Date.now() - cached.at < maxAgeMs) return cached.result;
+
+  const url = PAGES[source];
+  // cache-buster: get the page as published now, not an older CDN copy
+  const res = await fetch(`${url}${url.includes('?') ? '&' : '?'}_=${Date.now()}`, {
+    headers: { Accept: 'text/html', 'User-Agent': 'EIC-bookings-sync/1.0' },
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!res.ok) throw new Error(`Website ${res.status}`);
+  const { speakers, warnings } = parseSpeakers(await res.text());
+  if (!speakers.length) warnings.push('No speaker cards found on the page. Is the card checkbox embed still there?');
+  const result = { source, url, fetchedAt: new Date().toISOString(), speakers, warnings };
+  pageCache.set(source, { at: Date.now(), result });
+  return result;
 }
 
 export async function GET(request) {
   const source = new URL(request.url).searchParams.get('source') === 'staging' ? 'staging' : 'live';
-  const url = PAGES[source];
-  const headers = { 'Cache-Control': 'public, s-maxage=15' };
-
   try {
-    // cache-buster: get the page as published now, not an older CDN copy
-    const res = await fetch(`${url}${url.includes('?') ? '&' : '?'}_=${Date.now()}`, {
-      headers: { Accept: 'text/html', 'User-Agent': 'EIC-bookings-sync/1.0' },
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!res.ok) throw new Error(`Website ${res.status}`);
-    const { speakers, warnings } = parseSpeakers(await res.text());
-    if (!speakers.length) warnings.push('No speaker cards found on the page. Is the card checkbox embed still there?');
-    return Response.json({ source, url, fetchedAt: new Date().toISOString(), speakers, warnings }, { headers });
+    return Response.json(await readWebsiteSpeakers(source), { headers: { 'Cache-Control': 'public, s-maxage=15' } });
   } catch (err) {
     console.error(err);
-    return Response.json({ error: 'Could not read the website page', source, url }, { status: 502 });
+    return Response.json({ error: 'Could not read the website page', source, url: PAGES[source] }, { status: 502 });
   }
 }

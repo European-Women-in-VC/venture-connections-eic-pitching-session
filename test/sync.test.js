@@ -11,14 +11,15 @@ afterEach(() => {
 const card = (slug, name, company) =>
   `<div class="comps_card"><div class="w-embed"><label class="speaker-check" data-speaker-toggle data-speaker="${slug}" data-speaker-name="${name}" data-speaker-company="${company}"><input type="checkbox"></label></div></div>`;
 
-test('parses speaker cards in page order, decodes entities, dedupes, warns', () => {
+test('parses speaker cards: clean keys, copied cards get their own key, same person listed once', () => {
   const html = [
     card('geniel-srl', 'Cinzia Coppola', 'Geniel srl'),
     card('kedi', 'Tuğba Önal Suzek', 'KEDİ MOBİL &amp; Co'),
     card('quantonite', 'Isabell  Kunst ', 'quantonite'),
     card('geniel-srl', 'Cinzia Coppola', 'Geniel srl'), // same card twice (e.g. desktop + mobile)
-    card('geniel-srl', 'Someone Else', 'Geniel srl'),
-    card('', 'No Slug', 'Nowhere'),
+    card('geniel-srl', 'Elena Callegari', 'SageWrite'), // copied card, data-speaker not changed
+    card('', 'No Slug', 'Nowhere Labs'), // empty data-speaker
+    card('Sage Write ', 'Ann Typed', 'Typo Co'), // capitals / spaces
     `<label data-speaker-toggle data-speaker='single-quoted' data-speaker-name='O&#39;Neil' data-speaker-company=Acme>`,
   ].join('\n');
 
@@ -27,11 +28,15 @@ test('parses speaker cards in page order, decodes entities, dedupes, warns', () 
     { slug: 'geniel-srl', name: 'Cinzia Coppola', company: 'Geniel srl' },
     { slug: 'kedi', name: 'Tuğba Önal Suzek', company: 'KEDİ MOBİL & Co' },
     { slug: 'quantonite', name: 'Isabell Kunst', company: 'quantonite' },
+    { slug: 'sagewrite', name: 'Elena Callegari', company: 'SageWrite' },
+    { slug: 'nowhere-labs', name: 'No Slug', company: 'Nowhere Labs' },
+    { slug: 'sage-write', name: 'Ann Typed', company: 'Typo Co' },
     { slug: 'single-quoted', name: "O'Neil", company: 'Acme' },
   ]);
-  assert.equal(warnings.length, 2);
-  assert.match(warnings[0], /geniel-srl/);
-  assert.match(warnings[1], /without a slug/);
+  assert.equal(warnings.length, 3);
+  assert.match(warnings[0], /Elena Callegari.*already used by another card.*sagewrite/);
+  assert.match(warnings[1], /No Slug.*no data-speaker.*nowhere-labs/);
+  assert.match(warnings[2], /cleaned up to “sage-write”/);
 });
 
 test('decodes numeric and named entities', () => {
