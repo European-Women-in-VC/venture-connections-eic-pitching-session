@@ -1,0 +1,10 @@
+{
+  "version": { "key": "version", "value": "partners" },
+  "availability": {
+    "orbitra": { "recordId": "recDEMO01", "capacity": 2, "used": 0, "available": 2, "status": "available" },
+    "nordvolt": { "recordId": "recDEMO02", "capacity": 2, "used": 1, "available": 1, "status": "available" },
+    "helixmed": { "recordId": "recDEMO03", "capacity": 0, "used": 0, "available": 0, "status": "hidden" },
+    "quantaflow": { "recordId": "recDEMO04", "capacity": 2, "used": 0, "available": 0, "status": "paused" },
+    "agrisense": { "recordId": "recDEMO05", "capacity": 0, "used": 0, "available": 0, "status": "unavailable" }
+  }
+}
