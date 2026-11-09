@@ -1,11 +1,13 @@
-// GET /api/availability
-// Returns capacity per speaker slug from the Supabase view public.speaker_availability:
-// { "availability": { "<slug>": { "recordId": "<speaker uuid>", "capacity": 4, "used": 1, "available": 3, "status": "available" } } }
+// GET /api/availability?<the page's own query string>
+// Capacity per speaker slug for the page version the visit belongs to (e.g. ?version=partners; none → main):
+// { "version": { "key": "version", "value": "partners" } | null,
+//   "availability": { "<slug>": { "recordId": "<speaker uuid>", "capacity": 4, "used": 1, "available": 3, "status": "available" } } }
 //
-// Capacity logic lives in the database (speaker_availability view); this endpoint only passes it through.
+// Capacity logic lives in the database (website_availability → speaker_version_availability); this endpoint only passes it through.
 
 import { corsHeaders } from '../lib/cors.js';
 import { isConfigured, supabase } from '../lib/supabase.js';
+import { pageParams } from '../lib/page-params.js';
 
 // view status → status sent to the page
 const STATUSES = {
@@ -15,6 +17,7 @@ const STATUSES = {
   paused: 'paused',
   unavailable: 'unavailable',
   closed: 'closed',
+  hidden: 'hidden', // capacity 0 in a version set to hide such speakers
 };
 
 const cacheSeconds = () => Number(process.env.AVAILABILITY_CACHE_SECONDS ?? 10);
@@ -46,10 +49,13 @@ export async function GET(request) {
   }
 
   try {
-    const rows = await supabase('speaker_availability?select=id,slug,capacity,used,available,status');
+    const result = await supabase('rpc/website_availability', {
+      method: 'POST',
+      body: { p_params: pageParams(new URL(request.url).searchParams) },
+    });
     const s = cacheSeconds();
     return Response.json(
-      { availability: toAvailability(rows) },
+      { version: result?.version ?? null, availability: toAvailability(result?.rows || []) },
       { headers: { ...headers, 'Cache-Control': `public, s-maxage=${s}, stale-while-revalidate=${s * 3}` } },
     );
   } catch (err) {

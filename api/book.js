@@ -2,7 +2,8 @@
 // Books 1–4 speakers for an investor in one database transaction (public.book_meetings).
 //
 // Request JSON:
-//   { bookingId, email, firstName, lastName, company?, linkedin?, speakers: ["slug", …], website? (honeypot) }
+//   { bookingId, email, firstName, lastName, company?, linkedin?, speakers: ["slug", …], params?, page?, website? (honeypot) }
+//   params: the page's query params ({ version: 'partners' }) → which page version's capacity is used (none → main)
 // Responses:
 //   200 { ok: true, duplicate, repeat, already: [slugs requested before], unknown: [slugs not in the database] }
 //   409 { ok: false, error: "unavailable", unavailable: [slugs] }   nothing saved
@@ -13,9 +14,20 @@
 import { corsHeaders } from '../lib/cors.js';
 import { isConfigured, supabase, SupabaseError } from '../lib/supabase.js';
 import { registerFromWebsite } from '../lib/register-speakers.js';
+import { pageParams } from '../lib/page-params.js';
 
 const MAX_SPEAKERS = 4;
 const str = (v, max = 256) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
+
+// the page sends its params; an older cached page script only sends its address
+function visitParams(body) {
+  if (body.params !== undefined) return pageParams(body.params);
+  try {
+    return pageParams(new URL(str(body.page, 2048)).searchParams);
+  } catch {
+    return {};
+  }
+}
 
 export function OPTIONS(request) {
   const headers = corsHeaders(request);
@@ -82,6 +94,7 @@ export async function POST(request) {
           userAgent: str(request.headers.get('user-agent'), 512),
           origin: request.headers.get('origin'),
         },
+        p_params: visitParams(body),
       },
     });
 
