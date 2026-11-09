@@ -20,7 +20,8 @@
 </head>
 <body>
   <h1>Speakers demo</h1>
-  <p>Local test page with fake availability data. <code>nordvolt</code> is full, <code>cyberveil</code> is missing from "Airtable".</p>
+  <p>Local test page with fake availability data. <code>nordvolt</code> is full, <code>cyberveil</code> is missing from "Airtable".
+    <a href="?version=partners">?version=partners</a>: page version with its own capacity — HelixMed hidden, AgriSense 0 (unavailable), NordVolt free again.</p>
 
   <!-- mirrors Webflow: Collection List → items, with a hidden embed inside the list -->
   <div class="w-dyn-list"><div id="cards" class="w-dyn-items" role="list"></div></div>
@@ -44,6 +45,7 @@
       <input type="hidden" name="speakers-unselected" data-name="Speakers Not Selected" data-speakers-unselected>
       <input type="hidden" name="booking-id" data-name="Booking ID" data-booking-id>
       <input type="hidden" name="booking-status" data-name="Booking status" data-booking-status>
+      <input type="hidden" name="page-version" data-name="Page version" data-page-version>
       <input type="submit" value="Book" data-wait="Please wait...">
     </form>
     <div class="w-form-done" tabindex="-1" role="region" style="display:none">Thank you! Your submission has been received!</div>
@@ -112,7 +114,8 @@
     // same tag as in Webflow; ?sort=false on this demo URL sets data-sort="false"
     const tag = document.createElement('script');
     tag.src = '/public/speakers.js';
-    tag.dataset.api = '/dev/availability.json';
+    // a static file can't read ?version=…, so the demo picks the matching fixture itself
+    tag.dataset.api = new URLSearchParams(location.search).get('version') === 'partners' ? '/dev/availability-partners.json' : '/dev/availability.json';
     tag.dataset.sort = new URLSearchParams(location.search).get('sort') || 'true';
     document.body.append(tag);
   </script>

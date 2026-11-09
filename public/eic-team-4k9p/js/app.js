@@ -10,6 +10,7 @@ import { changeFor, diffSpeakers } from './sync.js';
 import { analyzeImport, importRow, readFormExport } from './import.js';
 import { dbCheck, loadVersion, versionLabel } from './version.js';
 import { ACCESS, MEMBER_STATUSES, PRODUCT, canEditProduct, memberAccess, memberStatus } from './team.js';
+import { ZERO_CAPACITY, isMain, paramText, parseVersionForm, suggestValue, versionLink } from './versions.js';
 import {
   CAPACITY_STATUSES,
   CLOSED,
@@ -39,10 +40,12 @@ const ENVIRONMENTS = {
   production: {
     url: 'https://pxlfskkmakgmfgcwrqay.supabase.co',
     key: 'sb_publishable_DToIGOE5HyUELkgj4XLfIg_6nuRftcx',
+    pageUrl: 'https://www.ventureconnections.co/eic-women-leadership-programme', // page versions link here
   },
   staging: {
     url: 'https://ordkpipvkpumdgpgmoxx.supabase.co',
     key: 'sb_publishable_eslOrlWhbn4eHJc4nE-4-A_20R70VPp',
+    pageUrl: 'https://ventureconnections-co.webflow.io/eic-women-leadership-programme',
   },
 };
 const PRODUCTION_HOSTS = [
@@ -51,7 +54,7 @@ const PRODUCTION_HOSTS = [
   'venture-connections-eic-pitching-session-oboilos-projects.vercel.app',
 ];
 const ENV = PRODUCTION_HOSTS.includes(location.hostname) ? 'production' : 'staging';
-const { url: SUPABASE_URL, key: SUPABASE_PUBLISHABLE_KEY } = ENVIRONMENTS[ENV];
+const { url: SUPABASE_URL, key: SUPABASE_PUBLISHABLE_KEY, pageUrl: PAGE_URL } = ENVIRONMENTS[ENV];
 const DEMO = ['localhost', '127.0.0.1'].includes(location.hostname) && new URLSearchParams(location.search).has('demo');
 // this page's own address (works whatever the folder is called); used for password-reset links
 const PANEL_URL = location.origin + location.pathname.replace(/\/?$/, '/');
@@ -87,11 +90,11 @@ const state = {
   user: null,
   live: false,
   loaded: false,
-  data: { speakers: [], availability: [], submissions: [], requests: [], events: [], admins: [] },
+  data: { speakers: [], versions: [], capacities: [], versionAvailability: [], submissions: [], requests: [], events: [], admins: [] },
   view: 'overview',
   filters: {
-    requests: { q: '', chip: 'active', speaker: '', source: '', tag: '', sort: { key: 'created', dir: 'desc' } },
-    investors: { q: '', chip: 'all', source: '', tag: '', sort: { key: 'created', dir: 'desc' } },
+    requests: { q: '', chip: 'active', speaker: '', source: '', tag: '', version: '', sort: { key: 'created', dir: 'desc' } },
+    investors: { q: '', chip: 'all', source: '', tag: '', version: '', sort: { key: 'created', dir: 'desc' } },
     speakers: { q: '', chip: 'all', sort: { key: 'name', dir: 'asc' } },
   },
   // ticked rows per table (bulk editing)
@@ -100,6 +103,7 @@ const state = {
   access: null, // public.my_access(): { email, name, isOwner, products: [{ slug, name, role }] }
   canEdit: false, // editor or owner of this panel's product; viewers get a read-only panel
   team: null, // public.team_list() (Team page, owners only)
+  pageVersion: null, // page version whose capacity Speakers / Overview show and edit (null = main)
 };
 
 // ---------------------------------------------------------------------------
@@ -181,6 +185,7 @@ const ICONS = {
   layoutRail: '<rect x="3.75" y="4.5" width="16.5" height="15" rx="2.25" /><path stroke-linecap="round" d="M7.5 4.5v15" />',
   layoutTop: '<rect x="3.75" y="4.5" width="16.5" height="15" rx="2.25" /><path stroke-linecap="round" d="M3.75 9h16.5" />',
   team: '<path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z" />',
+  versions: '<path stroke-linecap="round" stroke-linejoin="round" d="M13.19 8.688a4.5 4.5 0 0 1 1.242 7.244l-4.5 4.5a4.5 4.5 0 0 1-6.364-6.364l1.757-1.757m13.35-.622 1.757-1.757a4.5 4.5 0 0 0-6.364-6.364l-4.5 4.5a4.5 4.5 0 0 0 1.242 7.244" />',
   sync: '<path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />',
 };
 const icon = (name, cls = 'size-5') =>
@@ -215,6 +220,9 @@ function toast(message, tone = 'success', action = null) {
 
 const errorText = (err) => {
   const msg = String(err?.message || err || 'Something went wrong');
+  if (/page_versions_param_key_param_value_key/.test(msg)) return 'Another version already uses this link.';
+  if (/main_version_fixed/.test(msg)) return 'The main version is the page without a param; that can’t change.';
+  if (/invalid_capacity/.test(msg)) return 'Capacity must be a whole number from 0 to 99.';
   if (/speakers_slug_key|duplicate key.*slug/i.test(msg)) return 'A speaker with this slug already exists.';
   if (/foreign key/i.test(msg)) return 'This speaker still has meeting requests, so it can’t be deleted.';
   if (/speakers_slug_check|check constraint.*slug/i.test(msg)) return 'Slug may only contain lowercase letters, numbers and single dashes.';
@@ -229,7 +237,7 @@ const errorText = (err) => {
 // Derived data
 // ---------------------------------------------------------------------------
 function derived() {
-  const { speakers, availability, submissions, requests, events = [] } = state.data;
+  const { speakers, versions = [], versionAvailability = [], submissions, requests, events = [] } = state.data;
   const archivedSubs = new Set(submissions.filter((s) => s.archived_at).map((s) => s.id));
   const testSubs = new Set(submissions.filter(hasTestTag).map((s) => s.id));
   // a request is archived itself, or together with its investor
@@ -256,7 +264,15 @@ function derived() {
   const websiteSends = (id) => (eventsBySubmission.get(id) || []).filter((e) => e.source === 'website').length;
   const speakerById = new Map(speakers.map((s) => [s.id, s]));
   const submissionById = new Map(submissions.map((s) => [s.id, s]));
-  const availabilityById = new Map(availability.map((a) => [a.id, a]));
+  // capacity is counted per page version (separate pools)
+  const mainVersion = versions.find(isMain);
+  const versionById = new Map(versions.map((v) => [v.id, v]));
+  const availabilityIn = (versionId) => new Map(versionAvailability.filter((a) => a.version_id === versionId).map((a) => [a.id, a]));
+  // the team adds requests to the main version: its pool is the one their warnings check
+  const availabilityById = availabilityIn(mainVersion?.id);
+  // version picked on Speakers / Overview (unknown → main)
+  const currentVersion = versionById.get(state.pageVersion) || mainVersion;
+  const currentAvailability = availabilityIn(currentVersion?.id);
   const requestsBySubmission = new Map();
   const requestsBySpeaker = new Map();
   for (const r of requests) {
@@ -267,6 +283,9 @@ function derived() {
   }
   for (const list of requestsBySubmission.values()) list.sort((a, b) => (a.preference_rank || 99) - (b.preference_rank || 99));
   const stageOf = (subId) => investorStage((requestsBySubmission.get(subId) || []).filter((r) => !r.archived_at));
+  // page versions an investor booked on (their requests that aren't archived)
+  const versionsOf = (subId) =>
+    [...new Set((requestsBySubmission.get(subId) || []).filter((r) => !r.archived_at).map((r) => r.version_id))].map((id) => versionById.get(id)).filter(Boolean);
   // why a request needs a second look
   const flagsOf = (r) => {
     const flags = [];
@@ -282,6 +301,7 @@ function derived() {
   return {
     speakerById, submissionById, availabilityById, requestsBySubmission, requestsBySpeaker, live, real,
     eventsBySubmission, websiteSends, requestArchived, isTest, stageOf, flagsOf, allTags,
+    mainVersion, versionById, availabilityIn, currentVersion, currentAvailability, versionsOf,
   };
 }
 
@@ -362,6 +382,29 @@ const sourceFilter = (view) => `<select data-filter-source="${view}" class="${SE
     <option value="panel" ${state.filters[view].source === 'panel' ? 'selected' : ''}>Added by the team</option>
     <option value="import" ${state.filters[view].source === 'import' ? 'selected' : ''}>Imported (form export)</option>
   </select>`;
+
+// page version badge: main stays quiet, the other versions stand out
+const versionBadge = (v) =>
+  v
+    ? `<span class="inline-flex items-center rounded px-1.5 py-0.5 text-[11px] leading-4 font-medium ring-1 ring-inset ${
+        isMain(v) ? 'bg-white text-slate-500 ring-slate-300/70' : 'bg-violet-50 text-violet-700 ring-violet-600/20'
+      }" title="Page version: ${esc(paramText(v))}">${esc(v.name)}</span>`
+    : '';
+const versionFilter = (view) => `<select data-filter-version="${view}" class="${SELECT} w-full sm:w-48" aria-label="Page version">
+    <option value="">All page versions</option>
+    ${state.data.versions.map((v) => `<option value="${v.id}" ${state.filters[view].version === v.id ? 'selected' : ''}>${esc(v.name)}${v.archived_at ? ' (archived)' : ''}</option>`).join('')}
+  </select>`;
+// which version's capacity Speakers / Overview show and edit
+function versionPicker() {
+  const current = derived().currentVersion;
+  const list = state.data.versions.filter((v) => !v.archived_at || v.id === current?.id);
+  return `<label class="flex w-full items-center gap-2 text-sm text-slate-600 sm:w-auto"><span class="whitespace-nowrap">Capacity of</span>
+    <select data-page-version-pick class="${SELECT} min-w-0 flex-1 sm:w-56 sm:flex-none" aria-label="Page version">
+      ${list.map((v) => `<option value="${v.id}" ${v.id === current?.id ? 'selected' : ''}>${esc(v.name)}${isMain(v) ? '' : ` · ${esc(paramText(v))}`}</option>`).join('')}
+    </select></label>`;
+}
+const versionOptions = (keep) =>
+  state.data.versions.filter((v) => !v.archived_at || v.id === keep).map((v) => ({ value: v.id, label: `${v.name}${isMain(v) ? ' (no param)' : ` (${paramText(v)})`}` }));
 
 const statusOrder = Object.fromEntries(REQUEST_STATUSES.map((s, i) => [s.value, i]));
 const compare = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
@@ -497,6 +540,7 @@ const NAV = [
   { id: 'requests', label: 'Meeting requests' },
   { id: 'investors', label: 'Investors' },
   { id: 'speakers', label: 'Speakers' },
+  { id: 'versions', label: 'Page versions' },
   { id: 'team', label: 'Team', ownerOnly: true },
 ];
 const navItems = () => NAV.filter((n) => !n.ownerOnly || state.access?.isOwner);
@@ -697,7 +741,7 @@ function pageHeader(title, subtitle, actions = '') {
           <h1 class="text-xl font-semibold tracking-tight text-slate-900">${esc(title)}</h1>
           <p class="mt-1 text-sm text-slate-500">${subtitle}</p>
         </div>
-        <div class="flex items-center gap-2">${actions}</div>
+        <div class="flex flex-wrap items-center gap-2">${actions}</div>
       </div>
     </div>`;
 }
@@ -741,12 +785,13 @@ function statusSelect(kind, id, value, extra = '') {
 }
 
 function capacityBar(speaker, avail) {
-  const cap = Math.max(speaker.capacity, 1);
+  const capacity = avail?.capacity ?? speaker.capacity; // the page version's capacity
+  const cap = Math.max(capacity, 1);
   const confirmed = avail?.confirmed || 0;
   const used = avail?.used || 0;
   const pending = Math.max(used - confirmed, 0);
   const w = (n) => `${Math.min((n / cap) * 100, 100)}%`;
-  return `<div class="flex h-2 w-full overflow-hidden rounded-full bg-slate-100" title="${confirmed} confirmed · ${pending} pending · capacity ${speaker.capacity}">
+  return `<div class="flex h-2 w-full overflow-hidden rounded-full bg-slate-100" title="${confirmed} confirmed · ${pending} pending · capacity ${capacity}">
     <div class="bg-emerald-500" style="width:${w(confirmed)}"></div>
     <div class="bg-brand-500" style="width:${w(pending)}"></div>
   </div>`;
@@ -778,9 +823,12 @@ function renderOverview() {
   const active = requests.filter((r) => TAKES_PLACE.has(r.status)).length;
   const confirmed = requests.filter((r) => CONFIRMED.has(r.status)).length;
   const waitlisted = requests.filter((r) => r.status === 'waitlisted').length;
-  const openSpeakers = speakers.filter((s) => s.availability === 'open');
-  const capacity = openSpeakers.reduce((n, s) => n + s.capacity, 0);
-  const placesLeft = openSpeakers.reduce((n, s) => n + (d.availabilityById.get(s.id)?.available || 0), 0);
+  // capacity of the picked page version
+  const version = d.currentVersion;
+  const avail = d.currentAvailability;
+  const openSpeakers = speakers.filter((s) => s.availability === 'open' && avail.get(s.id)?.status !== 'hidden');
+  const capacity = openSpeakers.reduce((n, s) => n + (avail.get(s.id)?.capacity ?? s.capacity), 0);
+  const placesLeft = openSpeakers.reduce((n, s) => n + (avail.get(s.id)?.available || 0), 0);
 
   const kpi = (label, value, sub, goto) => `
     <a ${goto ? `href="${goto}"` : ''} class="${CARD} block p-5 ${goto ? 'transition hover:border-brand-300 hover:shadow-sm' : ''}">
@@ -793,14 +841,32 @@ function renderOverview() {
   const total = requests.length || 1;
 
   const speakerRows = [...speakers]
-    .map((s) => ({ s, a: d.availabilityById.get(s.id) }))
-    .sort((x, y) => (y.a?.used || 0) / Math.max(y.s.capacity, 1) - (x.a?.used || 0) / Math.max(x.s.capacity, 1) || x.s.name.localeCompare(y.s.name));
+    .map((s) => ({ s, a: avail.get(s.id) }))
+    .sort((x, y) => (y.a?.used || 0) / Math.max(y.a?.capacity ?? 0, 1) - (x.a?.used || 0) / Math.max(x.a?.capacity ?? 0, 1) || x.s.name.localeCompare(y.s.name));
+
+  // one row per active page version: its requests and its own places
+  const versionRows = state.data.versions
+    .filter((v) => !v.archived_at)
+    .map((v) => {
+      const mine = requests.filter((r) => r.version_id === v.id);
+      const pool = d.availabilityIn(v.id);
+      const open = speakers.filter((s) => s.availability === 'open' && pool.get(s.id)?.status !== 'hidden');
+      return {
+        v,
+        active: mine.filter((r) => TAKES_PLACE.has(r.status)).length,
+        confirmed: mine.filter((r) => CONFIRMED.has(r.status)).length,
+        investors: new Set(mine.map((r) => r.submission_id)).size,
+        left: open.reduce((n, s) => n + (pool.get(s.id)?.available || 0), 0),
+        capacity: open.reduce((n, s) => n + (pool.get(s.id)?.capacity || 0), 0),
+      };
+    });
 
   main.innerHTML =
     pageHeader(
       'Overview',
       'Investor bookings and speaker capacity at a glance.',
-      `<button data-action="download-backup" class="${BTN_SECONDARY}" title="Everything in one JSON file, including archived items and history">${icon('download', 'size-4')} Download backup</button>`,
+      `${versionPicker()}
+       <button data-action="download-backup" class="${BTN_SECONDARY}" title="Everything in one JSON file, including archived items and history">${icon('download', 'size-4')} Download backup</button>`,
     ) +
     `<div class="space-y-6 p-6">
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-5">
@@ -808,7 +874,7 @@ function renderOverview() {
         ${kpi('Active requests', active, 'take a place', '#requests')}
         ${kpi('Confirmed', confirmed, 'accepted or scheduled')}
         ${kpi('Waitlisted', waitlisted, 'not taking a place')}
-        ${kpi('Places left', `${placesLeft}<span class="text-lg font-medium text-slate-400"> / ${capacity}</span>`, `${openSpeakers.length} open speakers`, '#speakers')}
+        ${kpi('Places left', `${placesLeft}<span class="text-lg font-medium text-slate-400"> / ${capacity}</span>`, `${openSpeakers.length} open speakers · ${esc(version?.name || 'Main')}`, '#speakers')}
       </div>
 
       <div class="grid gap-6 lg:grid-cols-3">
@@ -855,9 +921,39 @@ function renderOverview() {
         </section>
       </div>
 
+      ${
+        versionRows.length > 1
+          ? `<section class="${CARD} p-5">
+        <div class="flex items-center justify-between">
+          <h2 class="font-semibold">Page versions</h2>
+          <a href="#versions" class="text-sm text-brand-600 hover:text-brand-700">Manage</a>
+        </div>
+        <div class="mt-3 overflow-x-auto scrollbar-thin">
+          <table class="min-w-full text-sm">
+            <thead class="text-xs text-slate-500"><tr>
+              <th class="py-2 pr-4 text-left font-medium">Version</th><th class="py-2 pr-4 text-right font-medium">Investors</th>
+              <th class="py-2 pr-4 text-right font-medium">Active requests</th><th class="py-2 pr-4 text-right font-medium">Confirmed</th>
+              <th class="py-2 text-right font-medium">Places left</th></tr></thead>
+            <tbody class="divide-y divide-slate-100">${versionRows
+              .map(
+                (x) => `<tr data-open="version" data-id="${x.v.id}" class="cursor-pointer hover:bg-slate-50">
+                <td class="py-2 pr-4"><span class="font-medium">${esc(x.v.name)}</span> <span class="font-mono text-xs text-slate-400">${esc(paramText(x.v))}</span></td>
+                <td class="py-2 pr-4 text-right tabular-nums">${x.investors}</td>
+                <td class="py-2 pr-4 text-right tabular-nums">${x.active}</td>
+                <td class="py-2 pr-4 text-right tabular-nums">${x.confirmed}</td>
+                <td class="py-2 text-right tabular-nums">${x.left}<span class="text-slate-400"> / ${x.capacity}</span></td>
+              </tr>`,
+              )
+              .join('')}</tbody>
+          </table>
+        </div>
+      </section>`
+          : ''
+      }
+
       <section class="${CARD} p-5">
         <div class="flex flex-wrap items-center justify-between gap-2">
-          <h2 class="font-semibold">Speaker capacity</h2>
+          <h2 class="font-semibold">Speaker capacity <span class="font-normal text-slate-500">· ${esc(version?.name || 'Main')}</span></h2>
           <div class="flex items-center gap-4 text-xs text-slate-500">
             <span class="flex items-center gap-1.5">${dot('green')} Confirmed</span>
             <span class="flex items-center gap-1.5"><span class="size-2 rounded-full bg-brand-500"></span> Pending</span>
@@ -870,7 +966,7 @@ function renderOverview() {
               const st = CAPACITY_STATUSES[a?.status] || CAPACITY_STATUSES.available;
               return `<button data-open="speaker" data-id="${s.id}" class="grid w-full grid-cols-[1fr_auto] items-center gap-x-3 gap-y-1.5 rounded-lg px-2 py-1.5 text-left hover:bg-slate-50">
                 <span class="min-w-0 truncate text-sm"><span class="font-medium">${esc(s.name)}</span> <span class="text-slate-500">· ${esc(s.company)}</span></span>
-                <span class="flex items-center gap-2"><span class="text-xs font-semibold tabular-nums text-slate-600">${a?.used || 0}/${s.capacity}</span>${a?.status !== 'available' ? pill(st.label, st.tone) : ''}</span>
+                <span class="flex items-center gap-2"><span class="text-xs font-semibold tabular-nums text-slate-600">${a?.used || 0}/${a?.capacity ?? s.capacity}</span>${a?.status !== 'available' ? pill(st.label, st.tone) : ''}</span>
                 <span class="col-span-2">${capacityBar(s, a)}</span>
               </button>`;
             })
@@ -912,9 +1008,10 @@ function requestRows() {
     .map((r) => ({ r, sub: d.submissionById.get(r.submission_id), sp: d.speakerById.get(r.speaker_id) }))
     .filter(({ r }) => !f.speaker || r.speaker_id === f.speaker)
     .filter(({ r }) => !f.source || r.source === f.source)
+    .filter(({ r }) => !f.version || r.version_id === f.version)
     .filter(({ r, sub }) => !f.tag || (r.tags || []).includes(f.tag) || (sub?.tags || []).includes(f.tag))
     .filter(({ r, sub, sp }) =>
-      matches(f.q, fullName(sub), sub?.email, sub?.company, sp?.name, sp?.company, r.internal_notes, r.request_number, ...(r.tags || [])),
+      matches(f.q, fullName(sub), sub?.email, sub?.company, sp?.name, sp?.company, r.internal_notes, r.request_number, d.versionById.get(r.version_id)?.name, ...(r.tags || [])),
     );
   return sortRows(
     rows,
@@ -950,6 +1047,7 @@ function renderRequests() {
           ${speakers.map((s) => `<option value="${s.id}" ${f.speaker === s.id ? 'selected' : ''}>${esc(s.name)} · ${esc(s.company)}</option>`).join('')}
         </select>
         ${sourceFilter('requests')}
+        ${versionFilter('requests')}
         ${tagFilter('requests')}
         <span id="count" class="ml-auto text-sm text-slate-500"></span>
       </div>
@@ -971,6 +1069,7 @@ function renderRequestsBody() {
     ${sortHeader('requests', 'rank', 'Pref.', 'w-16')}
     ${sortHeader('requests', 'status', 'Status')}
     <th class="px-4 py-2.5 text-left font-medium">Source</th>
+    <th class="px-4 py-2.5 text-left font-medium">Page version</th>
     <th class="px-4 py-2.5 text-left font-medium">Tags & notes</th>
     ${sortHeader('requests', 'created', 'Created')}
   </tr>`;
@@ -985,6 +1084,7 @@ function renderRequestsBody() {
           <td class="px-4 py-3 text-slate-500 tabular-nums">${r.preference_rank ? '#' + r.preference_rank : '—'}</td>
           <td class="px-4 py-3" data-stop>${statusSelect('request', r.id, r.status)}</td>
           <td class="px-4 py-3">${sourceBadge(r.source, r.created_by)}</td>
+          <td class="px-4 py-3">${versionBadge(d.versionById.get(r.version_id))}</td>
           <td class="max-w-72 px-4 py-3">
             <div class="flex flex-wrap gap-1">${flagChips(d.flagsOf(r))}${tagChips(r.tags)}</div>
             ${r.internal_notes ? `<p class="mt-1 truncate text-slate-500">${esc(r.internal_notes)}</p>` : ''}
@@ -993,7 +1093,7 @@ function renderRequestsBody() {
         </tr>`,
         )
         .join('')
-    : emptyRow(9, state.data.requests.length ? 'No requests match these filters.' : 'No meeting requests yet. They appear here as soon as an investor books.');
+    : emptyRow(10, state.data.requests.length ? 'No requests match these filters.' : 'No meeting requests yet. They appear here as soon as an investor books.');
   document.getElementById('view-body').innerHTML = tableWrap(head, body);
 }
 
@@ -1022,6 +1122,7 @@ function investorRows() {
     .filter((s) => chip.test(s, d))
     .map((s) => ({ s, reqs: (d.requestsBySubmission.get(s.id) || []).filter((r) => !r.archived_at), stage: d.stageOf(s.id) }))
     .filter(({ s }) => !f.source || s.source === f.source)
+    .filter(({ reqs }) => !f.version || reqs.some((r) => r.version_id === f.version))
     .filter(({ s }) => !f.tag || (s.tags || []).includes(f.tag))
     .filter(({ s, reqs }) =>
       matches(f.q, fullName(s), s.email, s.company, s.linkedin, s.notes, ...(s.tags || []), ...reqs.map((r) => d.speakerById.get(r.speaker_id)?.name)),
@@ -1054,6 +1155,7 @@ function renderInvestors() {
       <div class="flex flex-wrap items-center gap-3">
         ${searchBox('investors', 'Search name, email, company, speaker, tag…')}
         ${sourceFilter('investors')}
+        ${versionFilter('investors')}
         ${tagFilter('investors')}
         <span id="count" class="ml-auto text-sm text-slate-500"></span>
       </div>
@@ -1087,7 +1189,7 @@ function renderInvestorsBody() {
                 <div class="whitespace-nowrap">
                   <div class="font-medium">${esc(fullName(s))}</div>
                   <div class="text-xs text-slate-500">${esc(s.company || '')}</div>
-                  <div class="mt-1 flex flex-wrap gap-1">${sourceBadge(s.source, s.created_by)}${sendsBadge(d.websiteSends(s.id))}${s.archived_at ? pill('Archived', 'gray') : ''}${tagChips(s.tags)}</div>
+                  <div class="mt-1 flex flex-wrap gap-1">${sourceBadge(s.source, s.created_by)}${d.versionsOf(s.id).map(versionBadge).join('')}${sendsBadge(d.websiteSends(s.id))}${s.archived_at ? pill('Archived', 'gray') : ''}${tagChips(s.tags)}</div>
                 </div>
               </div>
             </td>
@@ -1118,11 +1220,12 @@ function renderInvestorsBody() {
 // ---------------------------------------------------------------------------
 // Speakers
 // ---------------------------------------------------------------------------
-const speakerStatus = (s, d) => d.availabilityById.get(s.id)?.status || 'available';
+const speakerStatus = (s, d) => d.currentAvailability.get(s.id)?.status || 'available'; // in the picked page version
 const SPEAKER_CHIPS = [
   { id: 'all', label: 'All', test: (s) => !s.archived_at },
   { id: 'available', label: 'Available', tone: 'green', test: (s, d) => !s.archived_at && speakerStatus(s, d) === 'available' },
   { id: 'full', label: 'Full', tone: 'red', test: (s, d) => !s.archived_at && ['full', 'over_capacity'].includes(speakerStatus(s, d)) },
+  { id: 'zero', label: '0 places', tone: 'gray', test: (s, d) => !s.archived_at && ['hidden', 'unavailable'].includes(speakerStatus(s, d)) && d.currentAvailability.get(s.id)?.capacity === 0 },
   { id: 'off', label: 'Paused / closed', tone: 'gray', test: (s) => !s.archived_at && s.availability !== 'open' },
   { id: 'archived', label: 'Archived', tone: 'gray', test: (s) => Boolean(s.archived_at) },
 ];
@@ -1136,15 +1239,15 @@ function speakerRows() {
   const d = derived();
   const chip = SPEAKER_CHIPS.find((c) => c.id === f.chip) || SPEAKER_CHIPS[0];
   const rows = state.data.speakers
-    .map((s) => ({ s, a: d.availabilityById.get(s.id) }))
+    .map((s) => ({ s, a: d.currentAvailability.get(s.id) }))
     .filter(({ s }) => chip.test(s, d))
     .filter(({ s }) => matches(f.q, s.name, s.company, s.slug, s.notes));
   return sortRows(
     rows,
     {
       name: ({ s }) => s.name.toLowerCase(),
-      capacity: ({ s }) => s.capacity,
-      used: ({ s, a }) => (a?.used || 0) / Math.max(s.capacity, 1),
+      capacity: ({ s, a }) => a?.capacity ?? s.capacity,
+      used: ({ s, a }) => (a?.used || 0) / Math.max(a?.capacity ?? s.capacity, 1),
       confirmed: ({ a }) => a?.confirmed || 0,
       waitlisted: ({ a }) => a?.waitlisted || 0,
     },
@@ -1155,11 +1258,15 @@ function speakerRows() {
 function renderSpeakers() {
   const main = document.getElementById('main');
   const d = derived();
+  const v = d.currentVersion;
   main.innerHTML =
     pageHeader(
       'Speakers',
-      'Capacity and availability. Changes show on the website within ~10 seconds.',
-      `<button data-export="speakers" class="${BTN_SECONDARY}">${icon('download', 'size-4')} Export CSV</button>
+      isMain(v)
+        ? 'Capacity and availability. Changes show on the website within ~10 seconds.'
+        : `Capacity on the <strong>${esc(v.name)}</strong> link (<span class="font-mono">?${esc(paramText(v))}</span>) — its own places. Empty capacity = the version default (${v.default_capacity}).`,
+      `${versionPicker()}
+       <button data-export="speakers" class="${BTN_SECONDARY}">${icon('download', 'size-4')} Export CSV</button>
        <button data-sync-source="live" class="${BTN_SECONDARY}">${icon('sync', 'size-4')} Compare with website</button>
        <button data-action="new-speaker" class="${BTN_PRIMARY}">${icon('plus', 'size-4')} Add speaker</button>`,
     ) +
@@ -1176,6 +1283,7 @@ function renderSpeakers() {
 
 function renderSpeakersBody() {
   const rows = speakerRows();
+  const main = isMain(derived().currentVersion);
   pruneSelection('speakers', rows.map(({ s }) => s.id));
   document.getElementById('count').textContent = `${rows.length} shown`;
   const head = `<tr>
@@ -1195,12 +1303,14 @@ function renderSpeakersBody() {
           return `<tr data-open="speaker" data-id="${s.id}" class="cursor-pointer hover:bg-slate-50 ${state.selected.speakers.has(s.id) ? 'bg-brand-50/60' : 'bg-white'}">
             ${selectCell('speakers', s.id)}
             <td class="whitespace-nowrap px-4 py-3"><div class="font-medium">${esc(s.name)}</div><div class="text-xs text-slate-500">${esc(s.company)} · <span class="font-mono">${esc(s.slug)}</span></div></td>
-            <td class="px-4 py-3" data-stop>
-              <input data-action="speaker-capacity" data-id="${s.id}" type="number" min="0" max="99" value="${s.capacity}" aria-label="Capacity"
-                class="w-20 rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm tabular-nums shadow-xs focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 focus:outline-none">
+            <td class="whitespace-nowrap px-4 py-3" data-stop>
+              <input data-action="speaker-capacity" data-id="${s.id}" type="number" min="0" max="99" value="${a?.capacity ?? s.capacity}" aria-label="Capacity"
+                class="w-20 rounded-lg border px-2.5 py-1.5 text-sm tabular-nums shadow-xs focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 focus:outline-none ${main || a?.is_override ? 'border-slate-300' : 'border-dashed border-slate-300 text-slate-500'}"
+                ${main || a?.is_override ? '' : 'title="Version default — type a number to set this speaker’s own capacity"'}>
+              ${!main && a?.is_override ? `<button type="button" data-action="capacity-reset" data-id="${s.id}" class="ml-1 text-xs text-slate-400 hover:text-brand-600" title="Back to the version default">↺ default</button>` : ''}
             </td>
             <td class="px-4 py-3" data-stop>${statusSelect('speaker', s.id, s.availability)}</td>
-            <td class="px-4 py-3"><div class="flex items-center gap-3"><div class="w-28">${capacityBar(s, a)}</div><span class="text-xs font-semibold tabular-nums text-slate-600">${a?.used || 0}/${s.capacity}</span></div></td>
+            <td class="px-4 py-3"><div class="flex items-center gap-3"><div class="w-28">${capacityBar(s, a)}</div><span class="text-xs font-semibold tabular-nums text-slate-600">${a?.used || 0}/${a?.capacity ?? s.capacity}</span></div></td>
             <td class="px-4 py-3 tabular-nums text-slate-600">${a?.confirmed || 0}</td>
             <td class="px-4 py-3 tabular-nums text-slate-600">${a?.waitlisted || 0}</td>
             <td class="px-4 py-3">${s.archived_at ? pill('Archived', 'gray') : a?.status === 'available' ? `<span class="text-xs text-slate-500">${a.available} place${a.available === 1 ? '' : 's'} left</span>` : pill(st.label, st.tone)}</td>
@@ -1219,6 +1329,7 @@ function renderSpeakersBody() {
 const EDIT_CONTROLS = [
   '[data-action$="-status"]',
   '[data-action="speaker-capacity"]',
+  '[data-action="capacity-reset"]',
   '[data-action^="new-"]',
   '[data-action="import-csv"]',
   '[data-action="add-requests"]',
@@ -1346,6 +1457,7 @@ function openRequest(id) {
           ${infoRow('LinkedIn', linkedin ? `<a href="${esc(linkedin)}" target="_blank" rel="noopener noreferrer" class="text-brand-600 hover:text-brand-700">Open profile ↗</a>` : esc(sub?.linkedin || '—'))}
           ${infoRow('Speaker', `<button type="button" data-open="speaker" data-id="${sp?.id}" class="font-medium text-brand-600 hover:text-brand-700">${esc(sp?.name || '?')}</button> <span class="text-slate-500">· ${esc(sp?.company || '')}</span>`)}
           ${infoRow('Preference', r.preference_rank ? `#${r.preference_rank} of ${(d.requestsBySubmission.get(r.submission_id) || []).length}` : '—')}
+          ${infoRow('Page version', versionBadge(d.versionById.get(r.version_id)) || '—')}
           ${infoRow('Submitted', esc(fmtDate(r.created_at)))}
         </dl>`,
       ) +
@@ -1356,6 +1468,7 @@ function openRequest(id) {
           ${field('Closure reason', select('closure_reason', CLOSURE_REASONS, r.closure_reason, '—'), 'For declined, cancelled or expired.')}
           ${field('Hold until', input('hold_until', toLocalInput(r.hold_until), 'type="datetime-local"'))}
           ${field('Assignee', select('assignee', assigneeOptions(), r.assignee, 'Nobody'))}
+          <div class="sm:col-span-2">${field('Page version', select('version_id', versionOptions(r.version_id), r.version_id), 'Whose places this request takes: the link the investor booked on.')}</div>
         </div>`,
       ) +
       section(
@@ -1380,6 +1493,7 @@ function openRequest(id) {
         scheduled_start: fromLocalInput(fd.get('scheduled_start')),
         scheduled_end: fromLocalInput(fd.get('scheduled_end')),
         internal_notes: nullIfEmpty(fd.get('internal_notes')),
+        version_id: fd.get('version_id') || r.version_id,
       });
       toast(`Request #${r.request_number} saved.`);
       reload();
@@ -1663,6 +1777,26 @@ function openSpeaker(id) {
   const a = s && d.availabilityById.get(s.id);
   const reqs = s ? d.requestsBySpeaker.get(s.id) || [] : [];
   const st = a && (CAPACITY_STATUSES[a.status] || CAPACITY_STATUSES.available);
+  // other page versions: this speaker's own capacity there (empty = the version default)
+  const otherVersions = state.data.versions.filter((v) => !isMain(v) && !v.archived_at);
+  const ownCapacity = (v) => state.data.capacities.find((c) => c.speaker_id === s?.id && c.version_id === v.id)?.capacity;
+  const versionCapacities = otherVersions.length
+    ? section(
+        'Capacity per page version',
+        `<div class="divide-y divide-slate-100 rounded-lg border border-slate-200">${otherVersions
+          .map((v) => {
+            const va = s && d.availabilityIn(v.id).get(s.id);
+            const vst = va && (CAPACITY_STATUSES[va.status] || CAPACITY_STATUSES.available);
+            return `<div class="flex items-center gap-3 px-3 py-2.5">
+              <div class="min-w-0 flex-1"><div class="truncate text-sm font-medium">${esc(v.name)}</div><div class="font-mono text-xs text-slate-400">?${esc(paramText(v))}</div></div>
+              ${va ? `<span class="text-xs tabular-nums text-slate-500">${va.used} taken</span>${va.status !== 'available' ? pill(vst.label, vst.tone) : ''}` : ''}
+              <input name="vcap:${v.id}" type="number" min="0" max="99" value="${ownCapacity(v) ?? ''}" placeholder="${v.default_capacity}" aria-label="Capacity on ${esc(v.name)}"
+                class="w-20 rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm tabular-nums shadow-xs placeholder:text-slate-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 focus:outline-none">
+            </div>`;
+          })
+          .join('')}</div><p class="mt-1.5 text-xs text-slate-500">Empty = the version’s default (shown in grey). Each version has its own places.</p>`,
+      )
+    : '';
   openDrawer({
     title: s ? esc(s.name) : 'Add speaker',
     subtitle: s ? esc(s.company) : 'The slug must match the speaker’s Webflow CMS slug.',
@@ -1671,7 +1805,7 @@ function openSpeaker(id) {
       (s ? archivedBanner(s, 'speaker') : '') +
       (s
         ? section(
-            'Capacity',
+            otherVersions.length ? 'Capacity · main version' : 'Capacity',
             `<div class="rounded-lg border border-slate-200 p-4">
               <div class="mb-3 flex items-center justify-between text-sm"><span><span class="text-2xl font-semibold">${a?.used || 0}</span><span class="text-slate-500"> / ${s.capacity} places taken</span></span>${pill(st.label, st.tone)}</div>
               ${capacityBar(s, a)}
@@ -1689,12 +1823,13 @@ function openSpeaker(id) {
             input('slug', s?.slug, `required pattern="[a-z0-9]+(-[a-z0-9]+)*" ${s ? 'disabled' : ''}`, 'font-mono'),
             s ? 'Links the website card to this speaker. If it changed in Webflow, use “Compare with website”.' : 'Lowercase, numbers and dashes, exactly as in Webflow (e.g. <span class="font-mono">geniel-srl</span>).',
           )}</div>
-          ${field('Capacity', input('capacity', s?.capacity ?? 4, 'type="number" min="0" max="99" required'))}
+          ${field(otherVersions.length ? 'Capacity (main version)' : 'Capacity', input('capacity', s?.capacity ?? 4, 'type="number" min="0" max="99" required'))}
           ${field('Availability', select('availability', SPEAKER_STATES, s?.availability || 'open'), 'Not “Open” = can’t be booked on the website.')}
           ${field('Assignee', select('assignee', assigneeOptions(), s?.assignee, 'Nobody'))}
           <div class="sm:col-span-2">${field('Notes', textarea('notes', s?.notes, 3))}</div>
         </div>`,
       ) +
+      versionCapacities +
       (s
         ? section(
             `Requests (${reqs.length})`,
@@ -1707,6 +1842,7 @@ function openSpeaker(id) {
                         <span class="block truncate text-sm font-medium hover:text-brand-600">${esc(fullName(sub))}</span>
                         <span class="block truncate text-xs text-slate-500">${esc(sub?.company || sub?.email || '')} · pref. #${r.preference_rank || '–'}</span>
                       </button>
+                      ${isMain(d.versionById.get(r.version_id)) ? '' : versionBadge(d.versionById.get(r.version_id))}
                       ${statusSelect('request', r.id, r.status)}
                     </li>`;
                   })
@@ -1730,13 +1866,23 @@ function openSpeaker(id) {
         assignee: nullIfEmpty(fd.get('assignee')),
         notes: nullIfEmpty(fd.get('notes')),
       };
+      // per version: only what changed; empty = back to the default
+      const versionChanges = otherVersions
+        .map((v) => {
+          const raw = String(fd.get(`vcap:${v.id}`) ?? '').trim();
+          const value = raw === '' ? null : Number(raw);
+          if (value !== null && (!Number.isInteger(value) || value < 0 || value > 99)) throw new Error(`Capacity on ${v.name} must be a whole number from 0 to 99.`);
+          return { v, value };
+        })
+        .filter(({ v, value }) => value !== (ownCapacity(v) ?? null));
+      let speakerId = s?.id;
       if (s) {
         await state.store.updateSpeaker(s.id, row);
-        toast(`${row.name} saved.`);
       } else {
-        await state.store.createSpeaker({ ...row, slug: String(fd.get('slug')).trim().toLowerCase() });
-        toast(`${row.name} added.`);
+        speakerId = (await state.store.createSpeaker({ ...row, slug: String(fd.get('slug')).trim().toLowerCase() })).id;
       }
+      for (const { v, value } of versionChanges) await state.store.setCapacity(v.id, [speakerId], value);
+      toast(`${row.name} ${s ? 'saved' : 'added'}.`);
       reload();
     },
   });
@@ -2016,6 +2162,166 @@ async function setMemberDisabled(id, disabled) {
 }
 
 // ---------------------------------------------------------------------------
+// Page versions: one Webflow page, several links (?version=…) with their own capacity per speaker
+// ---------------------------------------------------------------------------
+const zeroLabel = (value) => ZERO_CAPACITY.find((z) => z.value === value)?.label || value;
+
+// requests, investors and places of one version (not archived, not test)
+function versionStats(d, v) {
+  const mine = d.real.requests.filter((r) => r.version_id === v.id);
+  const pool = d.availabilityIn(v.id);
+  const open = d.live.speakers.filter((s) => s.availability === 'open' && pool.get(s.id)?.status !== 'hidden');
+  return {
+    requests: mine.length,
+    active: mine.filter((r) => TAKES_PLACE.has(r.status)).length,
+    investors: new Set(mine.map((r) => r.submission_id)).size,
+    left: open.reduce((n, s) => n + (pool.get(s.id)?.available || 0), 0),
+    capacity: open.reduce((n, s) => n + (pool.get(s.id)?.capacity || 0), 0),
+    zero: d.live.speakers.filter((s) => pool.get(s.id)?.capacity === 0).length,
+  };
+}
+
+const linkBox = (link) => `<div class="flex gap-2">
+    <input readonly value="${esc(link)}" class="${INPUT} font-mono text-xs" aria-label="Link">
+    <button type="button" data-copy="${esc(link)}" class="${BTN_PRIMARY} shrink-0">Copy</button>
+  </div>`;
+
+function renderVersions() {
+  const main = document.getElementById('main');
+  main.innerHTML =
+    pageHeader(
+      'Page versions',
+      'One Webflow page, several links. Each link has its own places per speaker — set them on the Speakers page (“Capacity of”).',
+      `<button data-action="new-version" class="${BTN_PRIMARY}">${icon('plus', 'size-4')} New version</button>`,
+    ) + `<div class="space-y-4 p-6"><div id="view-body"></div></div>`;
+  renderVersionsBody();
+}
+
+function renderVersionsBody() {
+  const body = document.getElementById('view-body');
+  if (!body || state.view !== 'versions') return;
+  const d = derived();
+  const versions = [...state.data.versions].sort((a, b) => Boolean(a.archived_at) - Boolean(b.archived_at) || (isMain(b) - isMain(a)) || a.created_at.localeCompare(b.created_at));
+  const head = ['Version', 'Link', 'Default capacity', '0 places', 'Investors', 'Active requests', 'Places left']
+    .map((h) => `<th class="px-4 py-2.5 text-left font-medium">${h}</th>`)
+    .join('');
+  const rows = versions
+    .map((v) => {
+      const st = versionStats(d, v);
+      const link = versionLink(PAGE_URL, v);
+      return `<tr data-open="version" data-id="${v.id}" class="cursor-pointer bg-white hover:bg-slate-50 ${v.archived_at ? 'opacity-60' : ''}">
+        <td class="px-4 py-3"><div class="flex items-center gap-2 font-medium">${esc(v.name)}${isMain(v) ? pill('Main', 'gray') : ''}${v.archived_at ? pill('Archived', 'gray') : ''}</div>
+          ${v.notes ? `<div class="max-w-64 truncate text-xs text-slate-500">${esc(v.notes)}</div>` : ''}</td>
+        <td class="whitespace-nowrap px-4 py-3" data-stop><div class="flex items-center gap-2">
+          <span class="font-mono text-xs text-slate-600">${isMain(v) ? 'no param' : '?' + esc(paramText(v))}</span>
+          <button type="button" data-copy="${esc(link)}" class="rounded px-1.5 py-0.5 text-xs font-medium text-brand-600 hover:bg-brand-50" title="${esc(link)}">Copy link</button>
+        </div></td>
+        <td class="whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">${isMain(v) ? '<span class="text-xs text-slate-500">speaker’s own</span>' : v.default_capacity}</td>
+        <td class="whitespace-nowrap px-4 py-3 text-xs text-slate-600">${esc(zeroLabel(v.zero_capacity))}${st.zero ? ` <span class="text-slate-400">(${st.zero})</span>` : ''}</td>
+        <td class="px-4 py-3 tabular-nums">${st.investors}</td>
+        <td class="px-4 py-3 tabular-nums">${st.active}</td>
+        <td class="px-4 py-3 tabular-nums">${st.left}<span class="text-slate-400"> / ${st.capacity}</span></td>
+      </tr>`;
+    })
+    .join('');
+  body.innerHTML = tableWrap(head, rows || emptyRow(7, 'No versions yet.'));
+}
+
+// live link preview + value suggested from the name (until the value is typed by hand)
+function updateVersionPreview(target) {
+  const form = target.closest('[data-version-form]');
+  const value = form.querySelector('[name="param_value"]');
+  if (!value) return;
+  if (target.name === 'param_value') value.dataset.touched = '1';
+  if (target.name === 'name' && !value.dataset.touched) value.value = suggestValue(target.value);
+  const key = form.querySelector('[name="param_key"]').value.trim().toLowerCase();
+  const preview = form.querySelector('[data-version-preview]');
+  const ok = key && value.value.trim();
+  preview.textContent = ok ? versionLink(PAGE_URL, { param_key: key, param_value: value.value.trim().toLowerCase() }) : 'Fill in the param and value';
+}
+
+function openVersion(id) {
+  const d = derived();
+  const v = id ? state.data.versions.find((x) => x.id === id) : null;
+  if (id && !v) return;
+  const main = v && isMain(v);
+  const st = v && versionStats(d, v);
+  const usedLink = v && !main && st.requests > 0;
+  const zeroOptions = ZERO_CAPACITY.map(
+    (z) => `<label class="flex items-start gap-3 rounded-lg border border-slate-200 px-3 py-2.5 has-[:checked]:border-brand-500 has-[:checked]:bg-brand-50/40">
+      <input type="radio" name="zero_capacity" value="${z.value}" ${(v?.zero_capacity || 'unavailable') === z.value ? 'checked' : ''} class="mt-0.5 accent-brand-600">
+      <span><span class="block text-sm font-medium">${esc(z.label)}</span><span class="block text-xs text-slate-500">${esc(z.hint)}</span></span>
+    </label>`,
+  ).join('');
+  const form = openDrawer({
+    title: v ? esc(v.name) : 'New page version',
+    subtitle: v ? (main ? 'The page without a version param' : `<span class="font-mono">?${esc(paramText(v))}</span>`) : 'A link to the same page with its own places per speaker.',
+    submitLabel: v ? 'Save changes' : 'Create version',
+    body: `<div data-version-form class="space-y-6">
+      ${v?.archived_at ? `<p class="rounded-lg bg-slate-100 px-3 py-2 text-sm text-slate-600">Archived ${esc(fmtDate(v.archived_at))}${v.archived_by ? ` by ${esc(v.archived_by)}` : ''}. Its link now books as the main version; its requests stay here.</p>` : ''}
+      ${v && !v.archived_at ? section('Link to share', linkBox(versionLink(PAGE_URL, v))) : ''}
+      ${
+        st
+          ? `<div class="grid grid-cols-3 gap-3 text-center">
+              ${[['Investors', st.investors], ['Active requests', st.active], ['Places left', `${st.left}<span class="text-sm text-slate-400"> / ${st.capacity}</span>`]]
+                .map(([label, value]) => `<div class="rounded-lg border border-slate-200 px-3 py-2.5"><div class="text-xl font-semibold tabular-nums">${value}</div><div class="text-xs text-slate-500">${label}</div></div>`)
+                .join('')}
+            </div>`
+          : ''
+      }
+      ${section(
+        'Version',
+        `<div class="grid gap-4 sm:grid-cols-2">
+          <div class="sm:col-span-2">${field('Name', input('name', v?.name, 'required maxlength="80" autocomplete="off" placeholder="e.g. Partners newsletter"'), 'Only the team sees it.')}</div>
+          ${
+            main
+              ? ''
+              : `${field('URL param', input('param_key', v?.param_key ?? 'version', 'required maxlength="40" autocomplete="off"', 'font-mono'), 'Prefilled; change only if needed.')}
+                 ${field('Value', input('param_value', v?.param_value, `required maxlength="60" autocomplete="off" placeholder="e.g. partners" ${v ? 'data-touched="1"' : ''}`, 'font-mono'), 'Lowercase letters, numbers, - and _.')}
+                 <div class="sm:col-span-2 rounded-lg bg-slate-50 px-3 py-2"><span class="text-xs text-slate-500">Link</span>
+                   <p data-version-preview class="break-all font-mono text-xs text-slate-700">${v ? esc(versionLink(PAGE_URL, v)) : 'Fill in the param and value'}</p></div>
+                 ${usedLink ? `<p class="sm:col-span-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 ring-1 ring-amber-600/20 ring-inset">${st.requests} request${st.requests === 1 ? '' : 's'} came in on this link. Changing the param or value breaks links already sent: they’d book as the main version.</p>` : ''}
+                 ${field('Default capacity', input('default_capacity', v?.default_capacity ?? 2, 'type="number" min="0" max="99" required'), 'Places per speaker on this link. Override single speakers on the Speakers page.')}`
+          }
+        </div>`,
+      )}
+      ${section('Speakers with 0 places on this link', `<div class="space-y-2">${zeroOptions}</div>`)}
+      ${section('Notes', textarea('notes', v?.notes, 3))}
+    </div>`,
+    footerLeft:
+      v && !main
+        ? v.archived_at
+          ? `<button type="button" data-action="restore-version" data-id="${v.id}" class="${BTN_SECONDARY}">Restore</button>`
+          : `<button type="button" data-action="archive-version" data-id="${v.id}" class="${BTN_DANGER}">Archive</button>`
+        : '',
+    onSubmit: async (fd) => {
+      const parsed = parseVersionForm(Object.fromEntries(fd), state.data.versions, v?.id ?? null, { main });
+      if (!parsed.ok) throw new Error(Object.values(parsed.errors)[0]);
+      const saved = await state.store.saveVersion(v?.id ?? null, parsed.value);
+      await reload();
+      toast(v ? 'Version saved.' : `“${saved.name}” created — copy its link below.`);
+      if (!v) setTimeout(() => openVersion(saved.id), 0); // show the new link to copy
+    },
+  });
+  form.querySelector('[name="name"]')?.focus();
+}
+
+async function setVersionArchived(id, archived) {
+  const v = state.data.versions.find((x) => x.id === id);
+  if (!v) return;
+  if (archived && !confirm(`Archive “${v.name}”? Its link then books as the main version (main capacity). Requests made on it stay in this version. You can restore it.`)) return;
+  try {
+    await state.store.archiveVersion(id, archived);
+    if (archived && state.pageVersion === id) state.pageVersion = null;
+    closeDrawer();
+    await reload();
+    toast(`“${v.name}” ${archived ? 'archived' : 'restored'}.`);
+  } catch (err) {
+    toast(errorText(err), 'error');
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Import the Webflow form export (CSV): pick what's missing, skip what exists, leave tests out
 // ---------------------------------------------------------------------------
 const IMPORT_GROUPS = [
@@ -2212,8 +2518,9 @@ function renderBulkBar() {
     requests: `<select data-bulk="status" class="${mini}"><option value="">Set status…</option>${REQUEST_STATUSES.map((x) => `<option value="${x.value}">${esc(x.label)}</option>`).join('')}</select>${assign}`,
     investors: assign,
     speakers: `<select data-bulk="availability" class="${mini}"><option value="">Availability…</option>${SPEAKER_STATES.map((x) => `<option value="${x.value}">${esc(x.label)}</option>`).join('')}</select>
-      <span class="inline-flex items-center gap-1"><input data-bulk-capacity type="number" min="0" max="99" placeholder="Capacity" class="w-24 ${mini} pr-2.5">
-      <button data-bulk="capacity" class="${btn} bg-slate-100 text-slate-700 hover:bg-slate-200">Set</button></span>`,
+      <span class="inline-flex items-center gap-1"><input data-bulk-capacity type="number" min="0" max="99" placeholder="Capacity" class="w-24 ${mini} pr-2.5" title="Capacity on ${esc(d.currentVersion?.name || 'Main')}">
+      <button data-bulk="capacity" class="${btn} bg-slate-100 text-slate-700 hover:bg-slate-200">Set</button>
+      ${isMain(d.currentVersion) ? '' : `<button data-bulk="capacity-default" class="${btn} text-slate-700 hover:bg-slate-100" title="Back to the version default">Default</button>`}</span>`,
   }[view];
 
   root.innerHTML = `<div class="fixed inset-x-0 bottom-4 z-30 flex justify-center px-4">
@@ -2244,6 +2551,33 @@ async function bulkChange(view, patch, message) {
     onClick: async () => {
       try {
         await state.store.restoreRows(view, before);
+        await reload();
+        toast('Undone.');
+      } catch (err) {
+        toast(errorText(err), 'error');
+      }
+    },
+  });
+}
+
+// capacity of the ticked speakers in the picked page version (null = back to its default), with Undo
+async function bulkCapacity(capacity, what) {
+  const d = derived();
+  const v = d.currentVersion;
+  const ids = [...state.selected.speakers];
+  const own = (id) => state.data.capacities.find((c) => c.speaker_id === id && c.version_id === v.id)?.capacity ?? null;
+  const before = new Map(); // earlier value → speakers
+  for (const id of ids) {
+    const value = isMain(v) ? state.data.speakers.find((s) => s.id === id)?.capacity : own(id);
+    before.set(value, [...(before.get(value) || []), id]);
+  }
+  await state.store.setCapacity(v.id, ids, capacity);
+  await reload();
+  toast(capacity === null ? `${what} back to the default of ${v.name}.` : `Capacity of ${what} on ${v.name} set to ${capacity}.`, 'success', {
+    label: 'Undo',
+    onClick: async () => {
+      try {
+        for (const [value, group] of before) await state.store.setCapacity(v.id, group, value);
         await reload();
         toast('Undone.');
       } catch (err) {
@@ -2291,10 +2625,11 @@ async function runBulk(action, el) {
     if (action === 'availability' && el.value) {
       return await bulkChange(view, { availability: el.value }, `${what} set to “${SPEAKER_STATE[el.value].label}”.`);
     }
-    if (action === 'capacity') {
-      const capacity = Number(document.querySelector('[data-bulk-capacity]').value);
-      if (!Number.isInteger(capacity) || capacity < 0) throw new Error('Capacity must be a whole number, 0 or more.');
-      return await bulkChange(view, { capacity }, `Capacity of ${what} set to ${capacity}.`);
+    if (action === 'capacity' || action === 'capacity-default') {
+      const raw = document.querySelector('[data-bulk-capacity]').value;
+      const capacity = action === 'capacity-default' ? null : Number(raw);
+      if (capacity !== null && (raw.trim() === '' || !Number.isInteger(capacity) || capacity < 0 || capacity > 99)) throw new Error('Capacity must be a whole number from 0 to 99.');
+      return await bulkCapacity(capacity, what);
     }
     if (action === 'add-tag') {
       const tag = document.querySelector('[data-bulk-tag-input]').value.trim().toLowerCase().replace(/^#/, '');
@@ -2344,11 +2679,12 @@ function exportView(view, selectedOnly = false) {
   if (view === 'requests') {
     download(
       'meeting-requests',
-      ['Request #', 'Status', 'Source', 'First name', 'Last name', 'Email', 'Company', 'LinkedIn', 'Speaker', 'Speaker company', 'Preference', 'Submitted', 'Hold until', 'Starts', 'Ends', 'Closure reason', 'Assignee', 'Tags', 'Flags', 'Notes'],
+      ['Request #', 'Status', 'Source', 'Page version', 'First name', 'Last name', 'Email', 'Company', 'LinkedIn', 'Speaker', 'Speaker company', 'Preference', 'Submitted', 'Hold until', 'Starts', 'Ends', 'Closure reason', 'Assignee', 'Tags', 'Flags', 'Notes'],
       only(requestRows(), ({ r }) => r.id).map(({ r, sub, sp }) => [
         r.request_number,
         REQUEST_STATUS[r.status]?.label,
         SOURCES[r.source]?.label,
+        d.versionById.get(r.version_id)?.name,
         sub?.first_name,
         sub?.last_name,
         sub?.email,
@@ -2371,7 +2707,7 @@ function exportView(view, selectedOnly = false) {
   } else if (view === 'investors') {
     download(
       'investors',
-      ['First name', 'Last name', 'Email', 'Company', 'LinkedIn', 'Stage', 'Source', 'Website submissions', 'Speakers (status)', 'Created', 'Assignee', 'Tags', 'Notes', 'Archived', 'Booking ID'],
+      ['First name', 'Last name', 'Email', 'Company', 'LinkedIn', 'Stage', 'Source', 'Page versions', 'Website submissions', 'Speakers (status)', 'Created', 'Assignee', 'Tags', 'Notes', 'Archived', 'Booking ID'],
       only(investorRows(), ({ s }) => s.id).map(({ s, reqs, stage }) => [
         s.first_name,
         s.last_name,
@@ -2380,6 +2716,7 @@ function exportView(view, selectedOnly = false) {
         s.linkedin,
         STAGE[stage]?.label,
         SOURCES[s.source]?.label,
+        d.versionsOf(s.id).map((v) => v.name).join('; '),
         d.websiteSends(s.id),
         reqs.map((r) => `${d.speakerById.get(r.speaker_id)?.name} (${REQUEST_STATUS[r.status]?.label})`).join('; '),
         fmtDate(s.created_at),
@@ -2393,12 +2730,13 @@ function exportView(view, selectedOnly = false) {
   } else {
     download(
       'speakers',
-      ['Name', 'Company', 'Slug', 'Capacity', 'Availability', 'Taken', 'Confirmed', 'Waitlisted', 'Places left', 'Website status'],
+      ['Name', 'Company', 'Slug', 'Page version', 'Capacity', 'Availability', 'Taken', 'Confirmed', 'Waitlisted', 'Places left', 'Website status'],
       only(speakerRows(), ({ s }) => s.id).map(({ s, a }) => [
         s.name,
         s.company,
         s.slug,
-        s.capacity,
+        d.currentVersion?.name,
+        a?.capacity ?? s.capacity,
         SPEAKER_STATE[s.availability]?.label,
         a?.used || 0,
         a?.confirmed || 0,
@@ -2413,8 +2751,8 @@ function exportView(view, selectedOnly = false) {
 // ---------------------------------------------------------------------------
 // Rendering + events
 // ---------------------------------------------------------------------------
-const VIEWS = { overview: renderOverview, requests: renderRequests, investors: renderInvestors, speakers: renderSpeakers, team: renderTeam };
-const BODIES = { requests: renderRequestsBody, investors: renderInvestorsBody, speakers: renderSpeakersBody };
+const VIEWS = { overview: renderOverview, requests: renderRequests, investors: renderInvestors, speakers: renderSpeakers, versions: renderVersions, team: renderTeam };
+const BODIES = { requests: renderRequestsBody, investors: renderInvestorsBody, speakers: renderSpeakersBody, versions: renderVersionsBody, team: renderTeamBody };
 
 function renderView() {
   const main = document.getElementById('main');
@@ -2442,7 +2780,7 @@ function refreshView() {
     };
     chipsEl.innerHTML = chipLists[state.view]();
   }
-  BODIES[state.view]();
+  BODIES[state.view]?.();
 }
 
 let reloadTimer = null;
@@ -2547,6 +2885,24 @@ function bindEvents() {
       return;
     }
     if (t.closest('[data-action="download-backup"]')) return downloadBackup();
+    if (t.closest('[data-action="new-version"]')) return openVersion(null);
+    const copy = t.closest('[data-copy]');
+    if (copy) {
+      await navigator.clipboard.writeText(copy.dataset.copy).then(() => toast('Link copied.'), () => toast('Couldn’t copy — select the link and copy it.', 'error'));
+      return;
+    }
+    const versionArchive = t.closest('[data-action="archive-version"], [data-action="restore-version"]');
+    if (versionArchive) return setVersionArchived(versionArchive.dataset.id, versionArchive.dataset.action === 'archive-version');
+    const capacityReset = t.closest('[data-action="capacity-reset"]');
+    if (capacityReset) {
+      try {
+        await state.store.setCapacity(derived().currentVersion.id, [capacityReset.dataset.id], null);
+        toast('Back to the version default.');
+      } catch (err) {
+        toast(errorText(err), 'error');
+      }
+      return reload();
+    }
 
     const addBtn = t.closest('[data-action="add-requests"]');
     if (addBtn) {
@@ -2620,8 +2976,9 @@ function bindEvents() {
         closeDrawer();
         await reload();
         if (verb === 'restore' && kind === 'investor') {
-          const over = (derived().requestsBySubmission.get(id) || [])
-            .map((r) => derived().availabilityById.get(r.speaker_id))
+          const dd = derived();
+          const over = (dd.requestsBySubmission.get(id) || [])
+            .map((r) => dd.availabilityIn(r.version_id).get(r.speaker_id)) // each request in its own version's pool
             .filter((a) => a?.status === 'over_capacity');
           if (over.length) toast(`${name} restored — ${over.length} speaker${over.length === 1 ? ' is' : 's are'} now over capacity. Check their requests.`, 'error');
           else toast(`${name} restored.`);
@@ -2637,7 +2994,7 @@ function bindEvents() {
     // row / link → side panel (but not when clicking a control inside the row)
     const open = t.closest('[data-open]');
     if (open && !t.closest('[data-stop], select, input, a')) {
-      const openers = { request: openRequest, investor: openInvestor, speaker: openSpeaker, member: openMember };
+      const openers = { request: openRequest, investor: openInvestor, speaker: openSpeaker, member: openMember, version: openVersion };
       return openers[open.dataset.open](open.dataset.id);
     }
   });
@@ -2667,6 +3024,14 @@ function bindEvents() {
       if (document.body.contains(el)) el.value = '';
       return;
     }
+    if (el.matches('[data-page-version-pick]')) {
+      state.pageVersion = el.value;
+      return renderView();
+    }
+    if (el.matches('[data-filter-version]')) {
+      state.filters[el.dataset.filterVersion].version = el.value;
+      return BODIES[el.dataset.filterVersion]();
+    }
     if (el.matches('[data-filter-tag]')) {
       state.filters[el.dataset.filterTag].tag = el.value;
       return BODIES[el.dataset.filterTag]();
@@ -2689,10 +3054,11 @@ function bindEvents() {
       'request-status': () => state.store.updateRequest(id, { status: el.value }),
       'submission-status': () => state.store.updateSubmission(id, { status: el.value }),
       'speaker-status': () => state.store.updateSpeaker(id, { availability: el.value }),
+      // in the picked page version (main: the speaker's capacity, others: this speaker's override)
       'speaker-capacity': () => {
         const capacity = Number(el.value);
-        if (!Number.isInteger(capacity) || capacity < 0) throw new Error('Capacity must be a whole number, 0 or more.');
-        return state.store.updateSpeaker(id, { capacity });
+        if (el.value.trim() === '' || !Number.isInteger(capacity) || capacity < 0 || capacity > 99) throw new Error('Capacity must be a whole number from 0 to 99.');
+        return state.store.setCapacity(derived().currentVersion.id, [id], capacity);
       },
     };
     if (!writes[action]) return;
@@ -2717,6 +3083,7 @@ function bindEvents() {
   });
 
   document.addEventListener('input', (e) => {
+    if (e.target.closest?.('[data-version-form]')) updateVersionPreview(e.target);
     const view = e.target.dataset?.search;
     if (!view) return;
     state.filters[view].q = e.target.value;
@@ -2766,7 +3133,7 @@ function leave() {
   if (unsubscribe) unsubscribe();
   unsubscribe = null;
   state.loaded = false;
-  state.data = { speakers: [], availability: [], submissions: [], requests: [], events: [], admins: [] };
+  state.data = { speakers: [], versions: [], capacities: [], versionAvailability: [], submissions: [], requests: [], events: [], admins: [] };
   closeDrawer();
 }
 

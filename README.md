@@ -116,6 +116,24 @@ A meeting request takes one of the speaker's places while its status is `new_req
 `waitlisted`, `declined`, `cancelled` and `expired` free the place. A speaker whose `availability` is not
 `open` can't be booked. `book_meetings` locks the chosen speakers, so two visitors can't take the last place.
 
+### Page versions (`?version=…`)
+
+One Webflow page, several links, each with its **own pool** of places per speaker
+(migration `20261109090000_page_versions.sql`):
+
+| Version | Link | Capacity of a speaker |
+|---|---|---|
+| Main | `/eic-women-leadership-programme` | `speakers.capacity` |
+| e.g. Partners | `/eic-women-leadership-programme?version=partners` | their override, else the version's default capacity |
+
+- Managers create versions on the panel's **Page versions** page (URL param prefilled `version`, value
+  required) and set capacity per version on **Speakers** (“Capacity of …”) or in a speaker's side panel.
+- A booking on version B never uses a place of the main version (`meeting_requests.version_id`).
+- Capacity 0 on a version: the speaker is shown as unavailable or hidden — chosen per version.
+- Unknown or archived values (typos, old links) book as the main version.
+- `speakers.js` sends the page's query params to `/api/availability` and `/api/book`; the database decides
+  (`resolve_page_version`, `website_availability`, `book_meetings`).
+
 ## Admin panel (`/eic-team-4k9p`)
 
 Team panel for the bookings: overview, meeting requests (status inline), investors, speakers
@@ -205,6 +223,8 @@ See `webflow/embeds.html`. In short:
     - `data-webflow-backup="true|false"`: also send each booking to Webflow Forms as a raw backup. Default `true`.
     - `data-api="…"` / `data-book-api="…"`: API URLs (default: derived from the script URL).
 - Add `?speakers-debug` to the page URL to log slugs that don't match the database.
+- Page versions need nothing in Webflow: the page's own `?version=…` decides. Optional hidden form field
+  `[data-page-version]` puts “main” or “version=partners” into the Webflow backup copy.
 
 ## Develop
 

@@ -3,6 +3,15 @@
 Versions follow `package.json` (shown in the panel sidebar). Each release is tagged `vX.Y.Z` on `main`.
 Database migrations a release needs are listed with it; apply them to production before merging.
 
+## 1.3.0 — 2026-11-09
+
+- Page versions: links to the same page (`?version=partners`, …), each with its own capacity per speaker.
+  Panel: Page versions page (create, copy link, archive), “Capacity of” picker on Speakers and Overview,
+  capacity per version in the speaker panel, version column / filter / badge on requests and investors.
+- Website: `speakers.js` shows and books the visit's version; 0 places → unavailable or hidden (per version).
+- Fix: the Worker's availability cache is per version; a data reload on the Team page no longer errors.
+- Migration: `20261109090000_page_versions.sql` (existing requests → main version).
+
 ## 1.2.0 — 2026-10-30
 
 - Team page (owners): members, owner / editor / viewer access per product, disable / enable, history,

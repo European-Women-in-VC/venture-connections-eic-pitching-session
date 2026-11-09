@@ -1,7 +1,8 @@
 // In-memory store with fake data for trying the panel locally: http://localhost:4322/eic-team-4k9p/?demo
 // Same interface as createSupabaseStore; nothing is sent anywhere.
 
-import { computeAvailability, hasTestTag } from './labels.js';
+import { hasTestTag } from './labels.js';
+import { versionAvailability } from './versions.js';
 
 const SPEAKERS = [
   ['orbitra', 'Anna Kowalczyk', 'Orbitra'],
@@ -62,6 +63,21 @@ function seed() {
     updated_at: hoursAgo(200),
   }));
 
+  // page versions: main + two links with their own capacity
+  const versions = [
+    { id: uuid(), name: 'Main', param_key: null, param_value: null, default_capacity: null, zero_capacity: 'unavailable', notes: null, archived_at: null, archived_by: null, created_at: hoursAgo(300), created_by: 'migration', updated_at: hoursAgo(300) },
+    { id: uuid(), name: 'Partners', param_key: 'version', param_value: 'partners', default_capacity: 2, zero_capacity: 'hide', notes: 'Link for partner funds’ newsletter.', archived_at: null, archived_by: null, created_at: hoursAgo(120), created_by: DEMO_ADMIN, updated_at: hoursAgo(120) },
+    { id: uuid(), name: 'Angels network', param_key: 'version', param_value: 'angels', default_capacity: 1, zero_capacity: 'unavailable', notes: null, archived_at: null, archived_by: null, created_at: hoursAgo(60), created_by: DEMO_ADMIN, updated_at: hoursAgo(60) },
+  ];
+  const [mainVersion, partners, angels] = versions;
+  const capacities = [
+    { speaker_id: speakers[2].id, version_id: partners.id, capacity: 0, updated_at: hoursAgo(100), updated_by: DEMO_ADMIN },
+    { speaker_id: speakers[0].id, version_id: partners.id, capacity: 4, updated_at: hoursAgo(100), updated_by: DEMO_ADMIN },
+    { speaker_id: speakers[1].id, version_id: angels.id, capacity: 0, updated_at: hoursAgo(50), updated_by: DEMO_ADMIN },
+  ];
+  // which version each demo investor booked on
+  const versionOf = (i) => (i === 1 || i === 4 ? partners : i === 6 ? angels : mainVersion);
+
   const submissions = [];
   const requests = [];
   const events = [];
@@ -102,6 +118,7 @@ function seed() {
         preference_rank: rank + 1,
         source: sub.source,
         created_by: sub.created_by,
+        version_id: fromPanel ? mainVersion.id : versionOf(i).id,
         hold_until: null,
         speaker_response_at: null,
         scheduled_start: null,
@@ -173,7 +190,7 @@ function seed() {
     teamMember('former@example.org', 'Fiona Former', { roles: { 'eic-bookings': 'editor' }, disabledAt: hoursAgo(48), disabledBy: DEMO_ADMIN }),
   ];
 
-  return { speakers, submissions, requests, events, team, admins: [{ email: DEMO_ADMIN, name: 'Demo admin' }] };
+  return { speakers, submissions, requests, events, team, versions, capacities, admins: [{ email: DEMO_ADMIN, name: 'Demo admin' }] };
 }
 
 export function createDemoStore() {
@@ -214,6 +231,7 @@ export function createDemoStore() {
         preference_rank: ++rank,
         source: 'panel',
         created_by: DEMO_ADMIN,
+        version_id: db.versions[0].id,
         hold_until: null,
         speaker_response_at: null,
         scheduled_start: null,
@@ -256,7 +274,9 @@ export function createDemoStore() {
       const testSubs = new Set(db.submissions.filter(hasTestTag).map((s) => s.id));
       return clone({
         speakers: [...db.speakers].sort((a, b) => a.name.localeCompare(b.name)),
-        availability: db.speakers.map((s) => computeAvailability(s, db.requests, archivedSubs, testSubs)),
+        versions: [...db.versions].sort((a, b) => a.created_at.localeCompare(b.created_at)),
+        capacities: db.capacities,
+        versionAvailability: versionAvailability(db.speakers, db.versions, db.capacities, db.requests, archivedSubs, testSubs),
         submissions: [...db.submissions].sort((a, b) => b.created_at.localeCompare(a.created_at)),
         requests: [...db.requests].sort((a, b) => b.created_at.localeCompare(a.created_at)),
         events: [...db.events].sort((a, b) => b.created_at.localeCompare(a.created_at)),
@@ -298,6 +318,29 @@ export function createDemoStore() {
       return clone(created);
     },
     addRequests,
+    // page versions: same rules as the database (simplified)
+    async saveVersion(id, row) {
+      const clash = db.versions.find((v) => v.id !== id && row.param_key && v.param_key === row.param_key && v.param_value === row.param_value);
+      if (clash) throw new Error('duplicate key value violates unique constraint "page_versions_param_key_param_value_key"');
+      if (id) return update('versions', id, row);
+      const created = { id: uuid(), notes: null, archived_at: null, archived_by: null, created_at: now(), created_by: DEMO_ADMIN, updated_at: now(), ...row };
+      db.versions.push(created);
+      changed();
+      return clone(created);
+    },
+    archiveVersion: (id, archived) => archive('versions', id, archived),
+    async setCapacity(versionId, speakerIds, capacity) {
+      const v = find('versions', versionId);
+      if (v.param_key == null) {
+        if (capacity == null) throw new Error('invalid_capacity');
+        speakerIds.forEach((id) => (find('speakers', id).capacity = capacity));
+      } else {
+        db.capacities = db.capacities.filter((c) => !(c.version_id === versionId && speakerIds.includes(c.speaker_id)));
+        if (capacity != null) speakerIds.forEach((id) => db.capacities.push({ speaker_id: id, version_id: versionId, capacity, updated_at: now(), updated_by: DEMO_ADMIN }));
+      }
+      changed();
+      return speakerIds.length;
+    },
     async createInvestor(inv) {
       const email = String(inv.email || '').trim().toLowerCase();
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error('invalid_email');
@@ -413,7 +456,7 @@ export function createDemoStore() {
           added.push(slugOf(id));
           db.requests.push({
             id: uuid(), request_number: db.requests.length + 1, submission_id: sub.id, speaker_id: id, status,
-            preference_rank: ++rank, source: 'import', created_by: DEMO_ADMIN, hold_until: null, speaker_response_at: null,
+            preference_rank: ++rank, source: 'import', created_by: DEMO_ADMIN, version_id: db.versions[0].id, hold_until: null, speaker_response_at: null,
             scheduled_start: null, scheduled_end: null, confirmation_sent_at: null, closure_reason: null, assignee: null,
             internal_notes: null, tags: [...row.tags], archived_at: null, archived_by: null, created_at: at, updated_at: now(),
           });

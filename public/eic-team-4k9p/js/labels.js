@@ -36,6 +36,7 @@ export const CAPACITY_STATUSES = {
   paused: { label: 'Paused', tone: 'amber' },
   unavailable: { label: 'Unavailable', tone: 'gray' },
   closed: { label: 'Closed', tone: 'gray' },
+  hidden: { label: 'Hidden', tone: 'gray' }, // capacity 0 in a version that hides such speakers
 };
 
 export const CLOSURE_REASONS = [
@@ -104,28 +105,4 @@ export function investorStage(requests) {
   if (st.has('scheduled_confirmed')) return 'confirmed';
   if (st.has('waitlisted')) return 'waitlisted';
   return 'closed';
-}
-
-// Same rules as the public.speaker_availability view (used by the demo data): archived requests,
-// requests of archived investors and anything tagged 'test' don't count; archived speakers are closed.
-export function computeAvailability(speaker, requests, archivedSubmissionIds = new Set(), testSubmissionIds = new Set()) {
-  const mine = requests.filter(
-    (r) =>
-      r.speaker_id === speaker.id &&
-      !r.archived_at &&
-      !archivedSubmissionIds.has(r.submission_id) &&
-      !testSubmissionIds.has(r.submission_id) &&
-      !hasTestTag(r),
-  );
-  const used = mine.filter((r) => TAKES_PLACE.has(r.status)).length;
-  const confirmed = mine.filter((r) => CONFIRMED.has(r.status)).length;
-  const waitlisted = mine.filter((r) => r.status === 'waitlisted').length;
-  const remaining = Math.max(speaker.capacity - used, 0);
-  const available = !speaker.archived_at && speaker.availability === 'open' ? remaining : 0;
-  let status = 'available';
-  if (speaker.archived_at) status = 'closed';
-  else if (used > speaker.capacity) status = 'over_capacity';
-  else if (speaker.availability !== 'open') status = speaker.availability;
-  else if (speaker.capacity - used <= 0) status = 'full';
-  return { id: speaker.id, used, confirmed, waitlisted, remaining, available, status };
 }

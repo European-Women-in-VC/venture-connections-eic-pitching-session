@@ -62,9 +62,24 @@ test('books and passes the form to book_meetings', async () => {
     p_company: 'Fund',
     p_linkedin: 'https://linkedin.com/in/ann',
     p_meta: undefined,
+    p_params: {},
   });
   assert.equal(calls[0].body.p_meta.page, 'https://site.webflow.io/eic');
   assert.equal(calls[0].body.p_meta.origin, ORIGIN);
+});
+
+test('page version: params sent by the page decide the pool', async () => {
+  const calls = mockRpc({ ok: true, submission_id: 'x', unknown: [] });
+  await POST(post({ ...valid, params: { version: 'Partners', fresh: '1' }, page: 'https://site.webflow.io/eic?version=other' }));
+  assert.deepEqual(calls[0].body.p_params, { version: 'partners' });
+});
+
+test('page version: older page script (no params) → read from the page address', async () => {
+  const calls = mockRpc({ ok: true, submission_id: 'x', unknown: [] });
+  await POST(post({ ...valid, page: 'https://site.webflow.io/eic?version=partners&utm_source=x' }));
+  assert.deepEqual(calls[0].body.p_params, { version: 'partners', utm_source: 'x' });
+  await POST(post({ ...valid, page: 'not a url' }));
+  assert.deepEqual(calls[1].body.p_params, {});
 });
 
 test('409 with the speakers that are no longer available', async () => {

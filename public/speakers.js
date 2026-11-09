@@ -11,6 +11,10 @@
  *   data-book-api="…"   booking API URL (default: /api/book next to this file)
  *   data-webflow-backup="false"  don't also send a copy to Webflow Forms (default "true")
  * Add ?speakers-debug to the page URL to log slug mismatches.
+ *
+ * Page versions: the page's own query params (e.g. ?version=partners) go to the availability and booking
+ * APIs; the database picks that version's capacity (unknown → main). Optional hidden form field
+ * [data-page-version] gets "main" or "key=value" for the Webflow copy.
  */
 (() => {
   const script = document.currentScript;
@@ -29,6 +33,14 @@
   const SORT = !(script && script.dataset.sort === 'false');
   // after booking, also submit the form to Webflow Forms as a raw backup copy (+ Webflow's notification email)
   const WEBFLOW_BACKUP = !(script && script.dataset.webflowBackup === 'false');
+  // this visit's page version comes from its query params (the server cleans them)
+  const PAGE_PARAMS = Object.fromEntries(new URLSearchParams(location.search));
+  function availabilityUrl(fresh) {
+    const url = new URL(API_URL, location.href);
+    Object.keys(PAGE_PARAMS).forEach((k) => url.searchParams.set(k, PAGE_PARAMS[k]));
+    if (fresh) url.searchParams.set('fresh', Date.now());
+    return url.href;
+  }
 
   // Speaker keys — same rules as the server (lib/speaker-keys.js); test/speaker-keys.test.js keeps them identical.
   // <speaker-keys>
@@ -75,6 +87,7 @@
     const unselectedField = document.querySelector('[data-speakers-unselected]');
     const recordIdsField = document.querySelector('[data-speakers-record-ids]');
     const bookingStatusField = document.querySelector('[data-booking-status]');
+    const pageVersionField = document.querySelector('[data-page-version]');
     const counters = document.querySelectorAll('[data-speakers-counter]');
     const cardToggles = [...document.querySelectorAll('[data-speaker-toggle]')];
     if (!list || !cardToggles.length) return;
@@ -87,8 +100,13 @@
     let reported = false;
 
     const known = (id) => Object.prototype.hasOwnProperty.call(availability, id);
-    // anything other than "available" (full, paused, unavailable, closed) can't be selected
+    // anything other than "available" (full, paused, unavailable, closed, hidden) can't be selected
     const isBlocked = (id) => known(id) && availability[id].status !== 'available';
+    // capacity 0 in a page version set to hide such speakers: card and checkbox disappear
+    const isHidden = (id) => known(id) && availability[id].status === 'hidden';
+    const showEl = (el, show) => {
+      el.style.display = show ? '' : 'none';
+    };
     const BADGES = { full: 'Fully booked', paused: 'Paused', unavailable: 'Unavailable', closed: 'Unavailable' };
     const blockedMessage = (id) =>
       shortOf(id) + (availability[id].status === 'full' ? ' is fully booked.' : ' is not taking requests right now.');
@@ -257,6 +275,7 @@
         input.checked = on;
         input.disabled = blocked && !on;
         const label = input.closest('label');
+        if (label && label.classList.contains('speakers-form_item')) showEl(label, !isHidden(id));
         if (label) {
           label.classList.toggle('is-full', blocked);
           label.classList.toggle('is-limit', atMax && !on && !blocked);
@@ -267,6 +286,7 @@
         const id = card.dataset.speakerCard;
         card.classList.toggle('is-selected', selected.includes(id));
         card.classList.toggle('is-full', isBlocked(id));
+        showEl(card.closest('.w-dyn-item') || card, !isHidden(id));
       });
 
       document.querySelectorAll('[data-availability]').forEach((el) => {
@@ -391,11 +411,11 @@
     }
 
     async function refresh(fresh) {
-      const url = fresh && FRESH_CHECKS ? API_URL + (API_URL.includes('?') ? '&' : '?') + 'fresh=' + Date.now() : API_URL;
-      const res = await fetch(url, { headers: { Accept: 'application/json' } });
+      const res = await fetch(availabilityUrl(fresh && FRESH_CHECKS), { headers: { Accept: 'application/json' } });
       if (!res.ok) throw new Error('Availability API ' + res.status);
       const data = await res.json();
       availability = data.availability || {};
+      if (pageVersionField) pageVersionField.value = data.version ? data.version.key + '=' + data.version.value : 'main';
 
       if (DEBUG && !reported) debugReport();
       reported = true;
@@ -499,6 +519,7 @@
           linkedin: fieldValue('linkedin'),
           website: fieldValue('website'),
           speakers: selected.slice(),
+          params: PAGE_PARAMS,
           page: location.href,
         }),
       });

@@ -15,7 +15,8 @@ afterEach(() => {
   globalThis.fetch = realFetch;
 });
 
-const req = (origin) => new Request('https://api.test/api/availability', { headers: origin ? { origin } : {} });
+const req = (origin, query = '') =>
+  new Request('https://api.test/api/availability' + query, { headers: origin ? { origin } : {} });
 
 test('maps view rows and statuses, skips empty slugs', () => {
   const out = toAvailability([
@@ -26,6 +27,8 @@ test('maps view rows and statuses, skips empty slugs', () => {
     { id: 'u5', slug: 'closed', capacity: 4, used: 0, available: 0, status: 'closed' },
     { id: 'u6', slug: 'odd-status', capacity: 2, used: 0, available: 2, status: 'something-new' },
     { id: 'u7', slug: '', capacity: 4, used: 0, available: 4, status: 'available' },
+    { id: 'u8', slug: 'hidden', capacity: 0, used: 0, available: 0, status: 'hidden' },
+    { id: 'u9', slug: 'zero', capacity: 0, used: 0, available: 0, status: 'unavailable' },
   ]);
   assert.deepEqual(out, {
     proskope: { recordId: 'u1', capacity: 4, used: 1, available: 3, status: 'available' },
@@ -34,40 +37,56 @@ test('maps view rows and statuses, skips empty slugs', () => {
     paused: { recordId: 'u4', capacity: 4, used: 0, available: 0, status: 'paused' },
     closed: { recordId: 'u5', capacity: 4, used: 0, available: 0, status: 'closed' },
     'odd-status': { recordId: 'u6', capacity: 2, used: 0, available: 2, status: 'available' },
+    hidden: { recordId: 'u8', capacity: 0, used: 0, available: 0, status: 'hidden' },
+    zero: { recordId: 'u9', capacity: 0, used: 0, available: 0, status: 'unavailable' },
   });
 });
 
-test('reads the view with the secret key and sets CORS + cache headers', async () => {
+test('asks the database for the visit\'s version (page params) with the secret key; CORS + cache headers', async () => {
   const calls = [];
   globalThis.fetch = async (url, opts) => {
-    calls.push({ url: String(url), headers: opts.headers });
-    return Response.json([{ id: 'u1', slug: 'a', capacity: 4, used: 1, available: 3, status: 'available' }]);
+    calls.push({ url: String(url), method: opts.method, headers: opts.headers, body: JSON.parse(opts.body) });
+    return Response.json({
+      version: { key: 'version', value: 'partners' },
+      rows: [{ id: 'u1', slug: 'a', capacity: 2, used: 1, available: 1, status: 'available' }],
+    });
   };
 
-  const res = await GET(req('https://site.webflow.io'));
+  const res = await GET(req('https://site.webflow.io', '?version=Partners&fresh=123'));
   assert.equal(res.status, 200);
   assert.deepEqual(await res.json(), {
-    availability: { a: { recordId: 'u1', capacity: 4, used: 1, available: 3, status: 'available' } },
+    version: { key: 'version', value: 'partners' },
+    availability: { a: { recordId: 'u1', capacity: 2, used: 1, available: 1, status: 'available' } },
   });
   assert.equal(calls.length, 1);
-  assert.equal(
-    calls[0].url,
-    'https://proj.supabase.co/rest/v1/speaker_availability?select=id,slug,capacity,used,available,status',
-  );
+  assert.equal(calls[0].url, 'https://proj.supabase.co/rest/v1/rpc/website_availability');
+  assert.equal(calls[0].method, 'POST');
+  assert.deepEqual(calls[0].body, { p_params: { version: 'partners' } });
   assert.equal(calls[0].headers.apikey, 'sb_secret_test');
   assert.equal(res.headers.get('access-control-allow-origin'), 'https://site.webflow.io');
   assert.equal(res.headers.get('cache-control'), 'public, s-maxage=10, stale-while-revalidate=30');
 });
 
+test('no params → main version (version: null)', async () => {
+  const calls = [];
+  globalThis.fetch = async (url, opts) => {
+    calls.push(JSON.parse(opts.body));
+    return Response.json({ version: null, rows: [] });
+  };
+  const res = await GET(req());
+  assert.deepEqual(await res.json(), { version: null, availability: {} });
+  assert.deepEqual(calls, [{ p_params: {} }]);
+});
+
 test('cache time is configurable', async () => {
   process.env.AVAILABILITY_CACHE_SECONDS = '60';
-  globalThis.fetch = async () => Response.json([]);
+  globalThis.fetch = async () => Response.json({ version: null, rows: [] });
   const res = await GET(req());
   assert.equal(res.headers.get('cache-control'), 'public, s-maxage=60, stale-while-revalidate=180');
 });
 
 test('no CORS header for unknown origin', async () => {
-  globalThis.fetch = async () => Response.json([]);
+  globalThis.fetch = async () => Response.json({ version: null, rows: [] });
   const res = await GET(req('https://evil.example'));
   assert.equal(res.headers.get('access-control-allow-origin'), null);
 });
