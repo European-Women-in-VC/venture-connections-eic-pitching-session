@@ -1,7 +1,7 @@
 // Data access for the panel. Reads and writes go straight to Supabase with the logged-in
 // user's session; row-level security (admins allowlist) decides what is allowed.
 
-const TABLES = ['speakers', 'submissions', 'meeting_requests', 'submission_events'];
+const TABLES = ['speakers', 'submissions', 'meeting_requests', 'submission_events', 'page_versions', 'speaker_version_capacity'];
 // panel views → tables
 export const TABLE = { requests: 'meeting_requests', investors: 'submissions', speakers: 'speakers' };
 
@@ -13,18 +13,21 @@ const must = ({ data, error }) => {
 export function createSupabaseStore(client) {
   return {
     async load() {
-      const [speakers, availability, submissions, requests, events, admins] = await Promise.all([
+      const [speakers, versions, capacities, versionAvailability, submissions, requests, events, admins] = await Promise.all([
         client.from('speakers').select('*').order('name').then(must),
+        client.from('page_versions').select('*').order('created_at').then(must),
+        client.from('speaker_version_capacity').select('*').then(must),
+        // capacity and use per speaker × page version (the main version included)
         client
-          .from('speaker_availability')
-          .select('id, used, confirmed, waitlisted, remaining, available, status')
+          .from('speaker_version_availability')
+          .select('id, version_id, capacity, is_override, used, confirmed, waitlisted, remaining, available, status')
           .then(must),
         client.from('submissions').select('*').order('created_at', { ascending: false }).then(must),
         client.from('meeting_requests').select('*').order('created_at', { ascending: false }).then(must),
         client.from('submission_events').select('*').order('created_at', { ascending: false }).then(must),
         client.from('admins').select('email, name').order('email').then(must),
       ]);
-      return { speakers, availability, submissions, requests, events, admins };
+      return { speakers, versions, capacities, versionAvailability, submissions, requests, events, admins };
     },
 
     updateRequest: (id, patch) =>
@@ -60,6 +63,15 @@ export function createSupabaseStore(client) {
         await client.from(TABLE[kind]).update(values).in('id', ids).then(must);
       }
     },
+
+    // page versions (links with their own capacity); archive instead of delete, like everything else
+    saveVersion: (id, row) =>
+      (id ? client.from('page_versions').update(row).eq('id', id) : client.from('page_versions').insert(row)).select().single().then(must),
+    archiveVersion: (id, archived) =>
+      client.from('page_versions').update({ archived_at: archived ? new Date().toISOString() : null }).eq('id', id).select().single().then(must),
+    // capacity of speakers in one version; null = back to the version's default (not for the main version)
+    setCapacity: (versionId, speakerIds, capacity) =>
+      client.rpc('panel_set_capacity', { p_version_id: versionId, p_speaker_ids: speakerIds, p_capacity: capacity }).then(must),
 
     // team additions (database functions record source = panel, who did it, and a history entry)
     addRequests: (submissionId, speakerIds, status = 'new_request', note = null) =>
